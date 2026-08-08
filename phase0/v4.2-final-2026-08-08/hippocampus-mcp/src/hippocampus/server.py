@@ -323,7 +323,8 @@ def make_handler(env: Env):
                 self._finalize_quiet(conn, ctx.request_id, "rejected", C.INVALID_TOOL,
                                      latency_ms=latency())
                 return self._rpc_error(400, rpc_id, -32602, "unknown tool")
-            params = envelope["params"]
+            params = dict(envelope["params"])
+            params.pop("_meta", None)  # MCP-reserved metadata; discard, do not process
             if set(params) - {"name", "arguments"} or not isinstance(params.get("arguments", {}), dict):
                 self._finalize_quiet(conn, ctx.request_id, "rejected", "envelope_rejected",
                                      latency_ms=latency())
