@@ -42,7 +42,10 @@ class Env:
         self.scan_text = secretscanner.scan_text
         self.scan_fields = secretscanner.scan_fields
         self.token_count = textlimits.token_count
-        self.hindsight = HindsightClient(hindsight_base, hindsight_token)
+        self.hindsight = HindsightClient(
+            hindsight_base, hindsight_token,
+            retain_timeout=float(os.environ.get("HIPPOCAMPUS_RETAIN_TIMEOUT_S", "300")),
+            recall_timeout=float(os.environ.get("HIPPOCAMPUS_RECALL_TIMEOUT_S", "15")))
         self.backoff_base = backoff_base
         self.scanner_down = False
         self.index_backend_down = False

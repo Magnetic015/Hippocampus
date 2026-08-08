@@ -16,6 +16,18 @@ def _commit_and_index(lab, key_factory, **over):
     return data
 
 
+def test_retain_timeout_exceeds_llm_extraction_budget():
+    """Hindsight retain runs LLM extraction (~40s observed on Pi5). A short
+    client timeout makes the worker abandon in-flight retains and re-run the
+    extraction on every attempt, so retain and recall need separate budgets."""
+    from hippocampus.hindsight_client import (
+        DEFAULT_RECALL_TIMEOUT_S, DEFAULT_RETAIN_TIMEOUT_S, HindsightClient)
+    assert DEFAULT_RETAIN_TIMEOUT_S >= 120
+    assert DEFAULT_RECALL_TIMEOUT_S <= 30  # search stays interactive
+    c = HindsightClient("http://x", "t")
+    assert c.retain_timeout > c.recall_timeout
+
+
 def test_retain_payload_shape(lab, key):
     _commit_and_index(lab, key, event_at="2026-08-01T09:30:00+08:00")
     bank, item = lab.mock.retain_log[0]
