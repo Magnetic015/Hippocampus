@@ -56,10 +56,12 @@
 
 | 角色 | 计划候选 | 实测结果 | 采用 |
 |---|---|---|---|
-| retain 主 | `gemini-3-flash` | 不存在 / 502 | `deepseek-v4-flash`（chat 200，`json_object` 返回干净 JSON） |
+| retain 主 | `gemini-3-flash` | 不存在 / 502 | 见下方切换 |
 | retain 备 | `deepseek-v4-flash` | `json_schema` 返回 `response_format type is unavailable` | `gemini-3.6-flash`（chat 200，接受 `json_schema`） |
 
-裸探针显示两者都不严格遵守 `json_schema`，但 **Hindsight 真实 retain 成功**（`STREAMING RETAIN COMPLETE: 5 units in 41.452s`），说明 v0.9.0 未依赖 strict schema 模式。failover 真实接管已在 §6.4 验证通过。
+首轮采用 `deepseek-v4-flash` 作 retain 主成员（chat 200、`json_object` 干净 JSON、真实 retain `STREAMING RETAIN COMPLETE: 5 units in 41.452s`）。
+
+**主成员切换为 `gpt-5.6-terra`（用户指定，2026-08-08 第三轮）**：按同一准入流程实测通过——`/models` 已列出、chat 200、`json_object` 返回 3 条有效 fact、`json_schema` 200、Hindsight 启动连接验证通过、真实 retain `scope=retain_extract_facts model=gpt-5.6-terra time=12.574s` 且 attempt=1 到达 `indexed`（比 deepseek 的 ~40s 快约 3 倍）。备成员 `gemini-3.6-flash` 保留。failover 真实接管已在 §6.4 验证通过（当时主成员为 deepseek，机制不受主成员身份影响）。
 
 ## 4. 部署中发现并修复的实现缺陷
 
