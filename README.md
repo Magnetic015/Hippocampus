@@ -1,0 +1,3 @@
+# Hippocampus
+
+Initial repository setup.
