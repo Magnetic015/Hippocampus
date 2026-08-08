@@ -59,7 +59,7 @@
 | retain 主 | `gemini-3-flash` | 不存在 / 502 | `deepseek-v4-flash`（chat 200，`json_object` 返回干净 JSON） |
 | retain 备 | `deepseek-v4-flash` | `json_schema` 返回 `response_format type is unavailable` | `gemini-3.6-flash`（chat 200，接受 `json_schema`） |
 
-裸探针显示两者都不严格遵守 `json_schema`，但 **Hindsight 真实 retain 成功**（`STREAMING RETAIN COMPLETE: 5 units in 41.452s`），说明 v0.9.0 未依赖 strict schema 模式。failover 真实接管（09 §11 条 2）**未验证 → OPEN**。
+裸探针显示两者都不严格遵守 `json_schema`，但 **Hindsight 真实 retain 成功**（`STREAMING RETAIN COMPLETE: 5 units in 41.452s`），说明 v0.9.0 未依赖 strict schema 模式。failover 真实接管已在 §6.4 验证通过。
 
 ## 4. 部署中发现并修复的实现缺陷
 
@@ -99,25 +99,67 @@ Hindsight retain 在容器内触发 LLM 事实抽取，Pi5 实测约 40 秒；�
 | 容器身份 | hindsight `uid=1000(hindsight)` 非 root；MCP 以 `1000:1003` 运行、只读 rootfs |
 | 现网边界 | 5 个现网容器状态不变、未重启；新增监听仅 `192.168.2.41:8888`；`/etc/passwd`、`/etc/group` 摘要未变 |
 
-## 6. 仍为 OPEN 的项
+## 6. Phase 1 步骤 7 / 9 收口（第二轮）
+
+### 6.1 Bank 与配置锁定（步骤 7）
+
+两个 Bank 均已存在并**以 bank 级显式 PATCH** 锁定，而非仅继承服务端 env 默认（后者会在日后改动 env 时静默翻转）：
+
+| Bank | facts | `store_document_text` | `audit_log_enabled` | `enable_auto_consolidation` | `llm_requests` | Hindsight audit |
+|---|---:|---|---|---|---:|---:|
+| `main` | 0 | false | false | false | 0 | 0 |
+| `commissioning-v4-2` | 16 | false | false | false | 0 | 0 |
+
+配置 PATCH 的请求体需要 `{"updates": {...}}` 包装；直接提交扁平字段返回 422。
+
+**排障记录**：首轮探测 bank 端点全部 401，原因是探针取了 `HIPPOCAMPUS_HINDSIGHT_TOKEN`——那只是 compose 里的映射名，secret plane 中的变量名是 `HINDSIGHT_INTERNAL_TOKEN`。与 API 无关。
+
+### 6.2 数据集分配（步骤 9）
+
+`datasets/phase1-assignment-manifest.json`：32 条分配为 `mac-claude` 11 / `mac-codex` 11 / `dockerNode-openclaw` 10。
+
+**按计划未导入。** 本轮曾开始脚本批量导入，在第 3 条（分配给仍为 disabled 的 `dockerNode-openclaw`）正确地被 401 拦下后停止并纠正：Phase 1 步骤 9 明确要求"尚不导入"，且 [09 §10.6](../../../plan/v4.2-final-2026-08-08/09-acceptance-gonogo.md) 要求导入必须由三端**各自真实运行上下文**完成，"curl/SDK 测试不能替代"——脚本导入反而会使该项验收失效。已进入隔离 Bank 的 2 条合成记录保留为回归基线。
+
+### 6.3 授权边界
+
+以 schema 合规的 payload 实测（长度不足会先被 `LIMIT_EXCEEDED` 拦下，测不到授权层）：
+
+| project | 结果 |
+|---|---|
+| `global` | `HIPPOCAMPUS_AUTHORIZATION_DENIED` |
+| `piworkspace`（实际 project） | `HIPPOCAMPUS_AUTHORIZATION_DENIED` |
+| `commissioning` | 正常写入 |
+
+### 6.4 failover 真实接管（Go/No-Go 条 2）
+
+把主成员指向不存在的模型名并重启 Hindsight（本项目自有容器，非现网业务），提交一条合成记忆：
+
+```
+LLM member 0 (openai/nonexistent-primary-canary) failed on call: 502; trying next member (1 left)
+APIStatusError (openai/gemini-3.6-flash, scope=retain_extract_facts, attempt 1/4): HTTP 429
+STREAMING RETAIN COMPLETE: 1 units across 1 batches in 18.443s
+```
+
+备成员真实接管并完成抽取，Outbox 在 **attempt=1** 到达 `indexed`。备成员首次调用撞到 429 配额后自行重试成功——该配额压力值得在 Phase 2 三端并发导入时复核。配置已还原，重启后日志无 canary 模型引用。
+
+## 7. 仍为 OPEN 的项
 
 | 项 | 原因 |
 |---|---|
-| 09 §11 条 2 failover 真实接管 | 未人为使主成员失败并验证备成员接管 |
 | 09 §10.2 failpoint 全崩溃窗口 | 生产镜像已剥离 failpoint（设计如此）；该验收在 Phase 0 disposable 测试构建完成 |
-| 09 §10.4 中文召回质量 | 仅单条样本；30–50 条数据集与 ground truth 未导入正式验收 |
+| 09 §10.4 中文召回质量 | 数据集按计划待 Phase 2 由三端真实导入后才能验收 |
 | 09 §10.8 60 分钟负载 / 资源峰值 | 未执行 |
-| Phase 2 三端真实 E2E | 未开始（本轮仅 `mac-claude` 身份经 curl 验证） |
+| Phase 2 三端真实 E2E | 未开始 |
 | P0.12 容器级回滚演练 | 回滚脚本未在本 project 上执行 |
 | 内部 TLS 或 LAN 明文 Bearer 残余风险决定 | 未决（Go/No-Go 条 12） |
 
-**Go / No-Go：尚未评估。** 一期正式 Bank `main` 未创建、未写入；全部数据在隔离 Bank `commissioning-v4-2` 与 `vault/shared/commissioning/`。
+**Go / No-Go：尚未评估。** 正式 Bank `main` 已创建但保持为空（facts=0）；全部数据在隔离 Bank `commissioning-v4-2` 与 `vault/shared/commissioning/`（6 个文档）。
 
-## 7. 待办：凭证轮换
+## 8. 待办：凭证轮换
 
 cliproxy 的 API key 在配置过程中经由对话通道传递，已落入会话记录。计划 [09 §10.9](../../../plan/v4.2-final-2026-08-08/09-acceptance-gonogo.md) 本就要求验收后轮换 PoC 凭证，**建议把该 cliproxy key 一并纳入轮换范围**。三客户端 Token 已设 14 天到期，`dockerNode-openclaw` 保持 disabled 且无 peer 绑定。
 
-## 8. 回滚
+## 9. 回滚
 
 ```bash
 bash /home/kkp/hippocampus/scripts/rollback-server.sh --manifest /home/kkp/hippocampus/scripts/rollback-manifest-prod.env --dry-run
