@@ -1,0 +1,518 @@
+{
+  "assignment": {
+    "dockerNode-openclaw": [
+      3,
+      6,
+      9,
+      12,
+      15,
+      18,
+      21,
+      24,
+      27,
+      30
+    ],
+    "mac-claude": [
+      1,
+      4,
+      7,
+      10,
+      13,
+      16,
+      19,
+      22,
+      25,
+      28,
+      31
+    ],
+    "mac-codex": [
+      2,
+      5,
+      8,
+      11,
+      14,
+      17,
+      20,
+      23,
+      26,
+      29,
+      32
+    ]
+  },
+  "ground_truth": [
+    {
+      "expected_titles": [
+        "写入链路与原子落盘"
+      ],
+      "query": "原子重命名与目录 fsync 怎么做的"
+    },
+    {
+      "expected_titles": [
+        "写入链路与原子落盘"
+      ],
+      "query": "落盘顺序 staging 同步"
+    },
+    {
+      "expected_titles": [
+        "Outbox 异步索引边界"
+      ],
+      "query": "正文会不会被送进索引引擎"
+    },
+    {
+      "expected_titles": [
+        "Outbox 异步索引边界"
+      ],
+      "query": "Detail 是否外发给 LLM"
+    },
+    {
+      "expected_titles": [
+        "秘密红线零落盘"
+      ],
+      "query": "命中密钥之后怎么处理"
+    },
+    {
+      "expected_titles": [
+        "秘密红线零落盘"
+      ],
+      "query": "凭证泄漏拒绝策略"
+    },
+    {
+      "expected_titles": [
+        "并集 gate 与 client 绑定"
+      ],
+      "query": "source allowlist 如何生效"
+    },
+    {
+      "expected_titles": [
+        "时间语义 unset"
+      ],
+      "query": "event_at unset 是什么语义"
+    },
+    {
+      "expected_titles": [
+        "端口与监听边界"
+      ],
+      "query": "8888 端口映射到哪里"
+    },
+    {
+      "expected_titles": [
+        "幂等冲突判定"
+      ],
+      "query": "HIPPOCAMPUS_IDEMPOTENCY_CONFLICT 什么时候返回"
+    },
+    {
+      "expected_titles": [
+        "DURABILITY_GAP 处置"
+      ],
+      "query": "DURABILITY_GAP 出现怎么办"
+    },
+    {
+      "expected_titles": [
+        "lease 契约"
+      ],
+      "query": "lease TTL 是多少秒"
+    },
+    {
+      "expected_titles": [
+        "token 计量口径"
+      ],
+      "query": "retrieval_text token 上限"
+    },
+    {
+      "expected_titles": [
+        "检索归并规则"
+      ],
+      "query": "Top 5 卡片是怎么去重的"
+    },
+    {
+      "expected_titles": [
+        "global 显式授权"
+      ],
+      "query": "global project 权限规则"
+    },
+    {
+      "expected_titles": [
+        "失败退避"
+      ],
+      "query": "worker retry backoff 多久"
+    },
+    {
+      "expected_titles": [
+        "审计导出"
+      ],
+      "query": "audit 保留多少天"
+    },
+    {
+      "expected_titles": [
+        "读取上限"
+      ],
+      "query": "memory read size limit"
+    },
+    {
+      "expected_titles": [
+        "JSON-RPC 限型"
+      ],
+      "query": "batch request rejected reason"
+    },
+    {
+      "expected_titles": [
+        "只读 rootfs 与能力"
+      ],
+      "query": "container hardening readonly rootfs"
+    }
+  ],
+  "records": [
+    {
+      "assigned_client": "mac-claude",
+      "detail_body": "memory_commit 先完成授权、ingress 限型与秘密扫描,再建立幂等 reservation,随后以相邻 staging 文件、fsync 文件与父目录、atomic rename 完成 Markdown 落盘。 本 Detail 为合成验收内容,不含任何实际秘密值。",
+      "event_at": "2026-07-02T10:15:00+08:00",
+      "retrieval_text": "写入链路与原子落盘。memory_commit 先完成授权、ingress 限型与秘密扫描,再建立幂等 reservation,随后以相邻 staging 文件、fsync 文件与父目录、atomic rename 完成 Markdown 落盘。 该条目属于 Pi5 192.168.2.41 上的 Hippocampus 记忆中枢一期实施范围,涉及 Hippocampus MCP、MD Vault、SQLite reservation 与 Outbox、单实例 index worker 以及 Hindsight v0.9.0 轻索引与召回的边界约定。稳定逻辑 URI 形如 memory://shared/commissioning/mem_20260808_SAMPLE,完整正文只保存在 MD Vault,索引只包含本检索文本与安全 metadata。",
+      "retrieval_tokens": 211,
+      "seq": 1,
+      "summary": "写入链路与原子落盘:memory_commit 先完成授权、ingress 限型与秘密扫描,再建立幂等 reservation,随后以相邻 staging 文件、fsync 文件与父目录、atomic rename 完成 Markdown 落盘。写入链路与原子落盘:memory_commit 先完成",
+      "title": "写入链路与原子落盘",
+      "type": "decision"
+    },
+    {
+      "assigned_client": "mac-codex",
+      "detail_body": "单实例 worker 只把 frontmatter 的 retrieval_text 与安全 metadata 送入 Hindsight,Detail 与完整 Markdown 永不外发,异步边界固定在 Hippocampus Outbox。 本 Detail 为合成验收内容,不含任何实际秘密值。",
+      "event_at": null,
+      "retrieval_text": "Outbox 异步索引边界。单实例 worker 只把 frontmatter 的 retrieval_text 与安全 metadata 送入 Hindsight,Detail 与完整 Markdown 永不外发,异步边界固定在 Hippocampus Outbox。 该条目属于 Pi5 192.168.2.41 上的 Hippocampus 记忆中枢一期实施范围,涉及 Hippocampus MCP、MD Vault、SQLite reservation 与 Outbox、单实例 index worker 以及 Hindsight v0.9.0 轻索引与召回的边界约定。稳定逻辑 URI 形如 memory://shared/commissioning/mem_20260808_SAMPLE,完整正文只保存在 MD Vault,索引只包含本检索文本与安全 metadata。",
+      "retrieval_tokens": 201,
+      "seq": 2,
+      "summary": "Outbox 异步索引边界:单实例 worker 只把 frontmatter 的 retrieval_text 与安全 metadata 送入 Hindsight,Detail 与完整 Markdown 永不外发,异步边界固定在 Hippocampus Outbox。Outbox 异步索引边界:单",
+      "title": "Outbox 异步索引边界",
+      "type": "constraint"
+    },
+    {
+      "assigned_client": "dockerNode-openclaw",
+      "detail_body": "命中秘密整笔拒绝,不脱敏保存、不留隔离副本,秘密值与指纹不进入 Vault、SQLite、Outbox、审计、Hindsight 或日志。 本 Detail 为合成验收内容,不含任何实际秘密值。",
+      "event_at": null,
+      "retrieval_text": "秘密红线零落盘。命中秘密整笔拒绝,不脱敏保存、不留隔离副本,秘密值与指纹不进入 Vault、SQLite、Outbox、审计、Hindsight 或日志。 该条目属于 Pi5 192.168.2.41 上的 Hippocampus 记忆中枢一期实施范围,涉及 Hippocampus MCP、MD Vault、SQLite reservation 与 Outbox、单实例 index worker 以及 Hindsight v0.9.0 轻索引与召回的边界约定。稳定逻辑 URI 形如 memory://shared/commissioning/mem_20260808_SAMPLE,完整正文只保存在 MD Vault,索引只包含本检索文本与安全 metadata。",
+      "retrieval_tokens": 210,
+      "seq": 3,
+      "summary": "秘密红线零落盘:命中秘密整笔拒绝,不脱敏保存、不留隔离副本,秘密值与指纹不进入 Vault、SQLite、Outbox、审计、Hindsight 或日志。秘密红线零落盘:命中秘密整笔拒绝,不脱敏保存、不留隔离副本,秘密值与指纹不进入 Vault、SQLite、Outbox、审计、Hindsight ",
+      "title": "秘密红线零落盘",
+      "type": "constraint"
+    },
+    {
+      "assigned_client": "mac-claude",
+      "detail_body": "listener 启动前加载全部已启用 client 精确地址的非空并集 gate,认证后再按 registry 复核 client 与 socket peer 绑定,不匹配固定拒绝 source_mismatch。 本 Detail 为合成验收内容,不含任何实际秘密值。",
+      "event_at": "2026-07-05T14:00:00+08:00",
+      "retrieval_text": "并集 gate 与 client 绑定。listener 启动前加载全部已启用 client 精确地址的非空并集 gate,认证后再按 registry 复核 client 与 socket peer 绑定,不匹配固定拒绝 source_mismatch。 该条目属于 Pi5 192.168.2.41 上的 Hippocampus 记忆中枢一期实施范围,涉及 Hippocampus MCP、MD Vault、SQLite reservation 与 Outbox、单实例 index worker 以及 Hindsight v0.9.0 轻索引与召回的边界约定。稳定逻辑 URI 形如 memory://shared/commissioning/mem_20260808_SAMPLE,完整正文只保存在 MD Vault,索引只包含本检索文本与安全 metadata。",
+      "retrieval_tokens": 204,
+      "seq": 4,
+      "summary": "并集 gate 与 client 绑定:listener 启动前加载全部已启用 client 精确地址的非空并集 gate,认证后再按 registry 复核 client 与 socket peer 绑定,不匹配固定拒绝 source_mismatch。并集 gate 与 client 绑定:li",
+      "title": "并集 gate 与 client 绑定",
+      "type": "procedure"
+    },
+    {
+      "assigned_client": "mac-codex",
+      "detail_body": "每个已认证 MCP HTTP 请求恰有一条脱敏审计;并集 gate 拒绝与认证失败各写一行未认证终态行,client_id 为空而 source_ip 记录 socket peer。 本 Detail 为合成验收内容,不含任何实际秘密值。",
+      "event_at": null,
+      "retrieval_text": "审计一请求一行。每个已认证 MCP HTTP 请求恰有一条脱敏审计;并集 gate 拒绝与认证失败各写一行未认证终态行,client_id 为空而 source_ip 记录 socket peer。 该条目属于 Pi5 192.168.2.41 上的 Hippocampus 记忆中枢一期实施范围,涉及 Hippocampus MCP、MD Vault、SQLite reservation 与 Outbox、单实例 index worker 以及 Hindsight v0.9.0 轻索引与召回的边界约定。稳定逻辑 URI 形如 memory://shared/commissioning/mem_20260808_SAMPLE,完整正文只保存在 MD Vault,索引只包含本检索文本与安全 metadata。",
+      "retrieval_tokens": 204,
+      "seq": 5,
+      "summary": "审计一请求一行:每个已认证 MCP HTTP 请求恰有一条脱敏审计;并集 gate 拒绝与认证失败各写一行未认证终态行,client_id 为空而 source_ip 记录 socket peer。审计一请求一行:每个已认证 MCP HTTP 请求恰有一条脱敏审计;并集 gate 拒绝与认证失败各写",
+      "title": "审计一请求一行",
+      "type": "decision"
+    },
+    {
+      "assigned_client": "dockerNode-openclaw",
+      "detail_body": "Hindsight v0.9.0 省略 timestamp 会默认当前 UTC,因此无可靠事件时间必须显式发送字符串 unset,顶层 timestamp 与 metadata event_at 取同值。 本 Detail 为合成验收内容,不含任何实际秘密值。",
+      "event_at": "2026-06-20T08:00:00+08:00",
+      "retrieval_text": "时间语义 unset。Hindsight v0.9.0 省略 timestamp 会默认当前 UTC,因此无可靠事件时间必须显式发送字符串 unset,顶层 timestamp 与 metadata event_at 取同值。 该条目属于 Pi5 192.168.2.41 上的 Hippocampus 记忆中枢一期实施范围,涉及 Hippocampus MCP、MD Vault、SQLite reservation 与 Outbox、单实例 index worker 以及 Hindsight v0.9.0 轻索引与召回的边界约定。稳定逻辑 URI 形如 memory://shared/commissioning/mem_20260808_SAMPLE,完整正文只保存在 MD Vault,索引只包含本检索文本与安全 metadata。",
+      "retrieval_tokens": 196,
+      "seq": 6,
+      "summary": "时间语义 unset:Hindsight v0.9.0 省略 timestamp 会默认当前 UTC,因此无可靠事件时间必须显式发送字符串 unset,顶层 timestamp 与 metadata event_at 取同值。时间语义 unset:Hindsight v0.9.0 省略 timest",
+      "title": "时间语义 unset",
+      "type": "fact"
+    },
+    {
+      "assigned_client": "mac-claude",
+      "detail_body": "一期唯一新增监听为 192.168.2.41:8888 映射容器 8080,Hindsight API、PostgreSQL 5432 与 Control Plane 9999 均不发布到主机。 本 Detail 为合成验收内容,不含任何实际秘密值。",
+      "event_at": "2026-07-10T09:00:00+08:00",
+      "retrieval_text": "端口与监听边界。一期唯一新增监听为 192.168.2.41:8888 映射容器 8080,Hindsight API、PostgreSQL 5432 与 Control Plane 9999 均不发布到主机。 该条目属于 Pi5 192.168.2.41 上的 Hippocampus 记忆中枢一期实施范围,涉及 Hippocampus MCP、MD Vault、SQLite reservation 与 Outbox、单实例 index worker 以及 Hindsight v0.9.0 轻索引与召回的边界约定。稳定逻辑 URI 形如 memory://shared/commissioning/mem_20260808_SAMPLE,完整正文只保存在 MD Vault,索引只包含本检索文本与安全 metadata。",
+      "retrieval_tokens": 199,
+      "seq": 7,
+      "summary": "端口与监听边界:一期唯一新增监听为 192.168.2.41:8888 映射容器 8080,Hindsight API、PostgreSQL 5432 与 Control Plane 9999 均不发布到主机。端口与监听边界:一期唯一新增监听为 192.168.2.41:8888 映射容器 8080",
+      "title": "端口与监听边界",
+      "type": "fact"
+    },
+    {
+      "assigned_client": "mac-codex",
+      "detail_body": "同 client 同 UUIDv4 key 同规范化 payload HMAC 复用原事件;同 key 不同 payload 返回 409 HIPPOCAMPUS_IDEMPOTENCY_CONFLICT,不生成文件或事件。 本 Detail 为合成验收内容,不含任何实际秘密值。",
+      "event_at": null,
+      "retrieval_text": "幂等冲突判定。同 client 同 UUIDv4 key 同规范化 payload HMAC 复用原事件;同 key 不同 payload 返回 409 HIPPOCAMPUS_IDEMPOTENCY_CONFLICT,不生成文件或事件。 该条目属于 Pi5 192.168.2.41 上的 Hippocampus 记忆中枢一期实施范围,涉及 Hippocampus MCP、MD Vault、SQLite reservation 与 Outbox、单实例 index worker 以及 Hindsight v0.9.0 轻索引与召回的边界约定。稳定逻辑 URI 形如 memory://shared/commissioning/mem_20260808_SAMPLE,完整正文只保存在 MD Vault,索引只包含本检索文本与安全 metadata。",
+      "retrieval_tokens": 197,
+      "seq": 8,
+      "summary": "幂等冲突判定:同 client 同 UUIDv4 key 同规范化 payload HMAC 复用原事件;同 key 不同 payload 返回 409 HIPPOCAMPUS_IDEMPOTENCY_CONFLICT,不生成文件或事件。幂等冲突判定:同 client 同 UUIDv4 key 同规",
+      "title": "幂等冲突判定",
+      "type": "procedure"
+    },
+    {
+      "assigned_client": "dockerNode-openclaw",
+      "detail_body": "秘密扫描器不可用时四个数据工具、worker、retry 与 startup recovery 全部停止,只有 healthz、readyz、version 可报告故障。 本 Detail 为合成验收内容,不含任何实际秘密值。",
+      "event_at": null,
+      "retrieval_text": "扫描器故障 fail-closed。秘密扫描器不可用时四个数据工具、worker、retry 与 startup recovery 全部停止,只有 healthz、readyz、version 可报告故障。 该条目属于 Pi5 192.168.2.41 上的 Hippocampus 记忆中枢一期实施范围,涉及 Hippocampus MCP、MD Vault、SQLite reservation 与 Outbox、单实例 index worker 以及 Hindsight v0.9.0 轻索引与召回的边界约定。稳定逻辑 URI 形如 memory://shared/commissioning/mem_20260808_SAMPLE,完整正文只保存在 MD Vault,索引只包含本检索文本与安全 metadata。",
+      "retrieval_tokens": 200,
+      "seq": 9,
+      "summary": "扫描器故障 fail-closed:秘密扫描器不可用时四个数据工具、worker、retry 与 startup recovery 全部停止,只有 healthz、readyz、version 可报告故障。扫描器故障 fail-closed:秘密扫描器不可用时四个数据工具、worker、retry ",
+      "title": "扫描器故障 fail-closed",
+      "type": "constraint"
+    },
+    {
+      "assigned_client": "mac-claude",
+      "detail_body": "prepared 状态下 staging 与正式文件同时缺失时,reservation 与 Outbox 行均标 conflict 并记 DURABILITY_GAP,readyz 返回 503,不猜测重建。 本 Detail 为合成验收内容,不含任何实际秘密值。",
+      "event_at": "2026-07-18T22:40:00+08:00",
+      "retrieval_text": "DURABILITY_GAP 处置。prepared 状态下 staging 与正式文件同时缺失时,reservation 与 Outbox 行均标 conflict 并记 DURABILITY_GAP,readyz 返回 503,不猜测重建。 该条目属于 Pi5 192.168.2.41 上的 Hippocampus 记忆中枢一期实施范围,涉及 Hippocampus MCP、MD Vault、SQLite reservation 与 Outbox、单实例 index worker 以及 Hindsight v0.9.0 轻索引与召回的边界约定。稳定逻辑 URI 形如 memory://shared/commissioning/mem_20260808_SAMPLE,完整正文只保存在 MD Vault,索引只包含本检索文本与安全 metadata。",
+      "retrieval_tokens": 196,
+      "seq": 10,
+      "summary": "DURABILITY_GAP 处置:prepared 状态下 staging 与正式文件同时缺失时,reservation 与 Outbox 行均标 conflict 并记 DURABILITY_GAP,readyz 返回 503,不猜测重建。DURABILITY_GAP 处置:prepared 状",
+      "title": "DURABILITY_GAP 处置",
+      "type": "incident"
+    },
+    {
+      "assigned_client": "mac-codex",
+      "detail_body": "lease_owner 恒为 process_instance_id,reservation lease TTL 60 秒、Outbox lease TTL 300 秒,时钟统一取 SQLite unixepoch,过期后只能由原子 CAS 接管。 本 Detail 为合成验收内容,不含任何实际秘密值。",
+      "event_at": null,
+      "retrieval_text": "lease 契约。lease_owner 恒为 process_instance_id,reservation lease TTL 60 秒、Outbox lease TTL 300 秒,时钟统一取 SQLite unixepoch,过期后只能由原子 CAS 接管。 该条目属于 Pi5 192.168.2.41 上的 Hippocampus 记忆中枢一期实施范围,涉及 Hippocampus MCP、MD Vault、SQLite reservation 与 Outbox、单实例 index worker 以及 Hindsight v0.9.0 轻索引与召回的边界约定。稳定逻辑 URI 形如 memory://shared/commissioning/mem_20260808_SAMPLE,完整正文只保存在 MD Vault,索引只包含本检索文本与安全 metadata。",
+      "retrieval_tokens": 193,
+      "seq": 11,
+      "summary": "lease 契约:lease_owner 恒为 process_instance_id,reservation lease TTL 60 秒、Outbox lease TTL 300 秒,时钟统一取 SQLite unixepoch,过期后只能由原子 CAS 接管。lease 契约:lease_ow",
+      "title": "lease 契约",
+      "type": "decision"
+    },
+    {
+      "assigned_client": "dockerNode-openclaw",
+      "detail_body": "Hindsight 一份 retrieval_text 可能被提取成多个 fact,服务端逐条校验后按 document_id 归并,冲突整组丢弃,最终最多返回 5 个唯一文档卡片。 本 Detail 为合成验收内容,不含任何实际秘密值。",
+      "event_at": null,
+      "retrieval_text": "检索归并规则。Hindsight 一份 retrieval_text 可能被提取成多个 fact,服务端逐条校验后按 document_id 归并,冲突整组丢弃,最终最多返回 5 个唯一文档卡片。 该条目属于 Pi5 192.168.2.41 上的 Hippocampus 记忆中枢一期实施范围,涉及 Hippocampus MCP、MD Vault、SQLite reservation 与 Outbox、单实例 index worker 以及 Hindsight v0.9.0 轻索引与召回的边界约定。稳定逻辑 URI 形如 memory://shared/commissioning/mem_20260808_SAMPLE,完整正文只保存在 MD Vault,索引只包含本检索文本与安全 metadata。",
+      "retrieval_tokens": 212,
+      "seq": 12,
+      "summary": "检索归并规则:Hindsight 一份 retrieval_text 可能被提取成多个 fact,服务端逐条校验后按 document_id 归并,冲突整组丢弃,最终最多返回 5 个唯一文档卡片。检索归并规则:Hindsight 一份 retrieval_text 可能被提取成多个 fact,服务端",
+      "title": "检索归并规则",
+      "type": "procedure"
+    },
+    {
+      "assigned_client": "mac-claude",
+      "detail_body": "retrieval_text 以版本锁定的 tiktoken cl100k_base 计数,范围 100 到 600,硬上限 800;summary 与 title 按 Unicode scalar 计数。 本 Detail 为合成验收内容,不含任何实际秘密值。",
+      "event_at": null,
+      "retrieval_text": "token 计量口径。retrieval_text 以版本锁定的 tiktoken cl100k_base 计数,范围 100 到 600,硬上限 800;summary 与 title 按 Unicode scalar 计数。 该条目属于 Pi5 192.168.2.41 上的 Hippocampus 记忆中枢一期实施范围,涉及 Hippocampus MCP、MD Vault、SQLite reservation 与 Outbox、单实例 index worker 以及 Hindsight v0.9.0 轻索引与召回的边界约定。稳定逻辑 URI 形如 memory://shared/commissioning/mem_20260808_SAMPLE,完整正文只保存在 MD Vault,索引只包含本检索文本与安全 metadata。",
+      "retrieval_tokens": 197,
+      "seq": 13,
+      "summary": "token 计量口径:retrieval_text 以版本锁定的 tiktoken cl100k_base 计数,范围 100 到 600,硬上限 800;summary 与 title 按 Unicode scalar 计数。token 计量口径:retrieval_text 以版本锁定的 tik",
+      "title": "token 计量口径",
+      "type": "decision"
+    },
+    {
+      "assigned_client": "mac-codex",
+      "detail_body": "Go 前三端写入只允许 project commissioning 与隔离 Bank,正式 main 保持为空,验收后撤销 PoC Token 并移除 commissioning 权限。 本 Detail 为合成验收内容,不含任何实际秘密值。",
+      "event_at": null,
+      "retrieval_text": "commissioning 隔离。Go 前三端写入只允许 project commissioning 与隔离 Bank,正式 main 保持为空,验收后撤销 PoC Token 并移除 commissioning 权限。 该条目属于 Pi5 192.168.2.41 上的 Hippocampus 记忆中枢一期实施范围,涉及 Hippocampus MCP、MD Vault、SQLite reservation 与 Outbox、单实例 index worker 以及 Hindsight v0.9.0 轻索引与召回的边界约定。稳定逻辑 URI 形如 memory://shared/commissioning/mem_20260808_SAMPLE,完整正文只保存在 MD Vault,索引只包含本检索文本与安全 metadata。",
+      "retrieval_tokens": 197,
+      "seq": 14,
+      "summary": "commissioning 隔离:Go 前三端写入只允许 project commissioning 与隔离 Bank,正式 main 保持为空,验收后撤销 PoC Token 并移除 commissioning 权限。commissioning 隔离:Go 前三端写入只允许 project com",
+      "title": "commissioning 隔离",
+      "type": "constraint"
+    },
+    {
+      "assigned_client": "dockerNode-openclaw",
+      "detail_body": "保留 project global 必须在 registry 分别显式授予读写,不因代表客户端身份自动获得,也不会自动并入其他 project 的召回结果。 本 Detail 为合成验收内容,不含任何实际秘密值。",
+      "event_at": null,
+      "retrieval_text": "global 显式授权。保留 project global 必须在 registry 分别显式授予读写,不因代表客户端身份自动获得,也不会自动并入其他 project 的召回结果。 该条目属于 Pi5 192.168.2.41 上的 Hippocampus 记忆中枢一期实施范围,涉及 Hippocampus MCP、MD Vault、SQLite reservation 与 Outbox、单实例 index worker 以及 Hindsight v0.9.0 轻索引与召回的边界约定。稳定逻辑 URI 形如 memory://shared/commissioning/mem_20260808_SAMPLE,完整正文只保存在 MD Vault,索引只包含本检索文本与安全 metadata。",
+      "retrieval_tokens": 198,
+      "seq": 15,
+      "summary": "global 显式授权:保留 project global 必须在 registry 分别显式授予读写,不因代表客户端身份自动获得,也不会自动并入其他 project 的召回结果。global 显式授权:保留 project global 必须在 registry 分别显式授予读写,不因代表客户端身",
+      "title": "global 显式授权",
+      "type": "constraint"
+    },
+    {
+      "assigned_client": "mac-claude",
+      "detail_body": "rollback-server.sh 只认环境回滚清单,核对 project 与 managed、plan 双标签,不匹配一律拒绝,执行不带 -v 的精确 Compose down,命名卷默认保留。 本 Detail 为合成验收内容,不含任何实际秘密值。",
+      "event_at": null,
+      "retrieval_text": "回滚清单机制。rollback-server.sh 只认环境回滚清单,核对 project 与 managed、plan 双标签,不匹配一律拒绝,执行不带 -v 的精确 Compose down,命名卷默认保留。 该条目属于 Pi5 192.168.2.41 上的 Hippocampus 记忆中枢一期实施范围,涉及 Hippocampus MCP、MD Vault、SQLite reservation 与 Outbox、单实例 index worker 以及 Hindsight v0.9.0 轻索引与召回的边界约定。稳定逻辑 URI 形如 memory://shared/commissioning/mem_20260808_SAMPLE,完整正文只保存在 MD Vault,索引只包含本检索文本与安全 metadata。",
+      "retrieval_tokens": 209,
+      "seq": 16,
+      "summary": "回滚清单机制:rollback-server.sh 只认环境回滚清单,核对 project 与 managed、plan 双标签,不匹配一律拒绝,执行不带 -v 的精确 Compose down,命名卷默认保留。回滚清单机制:rollback-server.sh 只认环境回滚清单,核对 projec",
+      "title": "回滚清单机制",
+      "type": "procedure"
+    },
+    {
+      "assigned_client": "mac-codex",
+      "detail_body": "Hindsight 3 GiB、PostgreSQL 1 GiB、Hippocampus MCP 与 worker 512 MiB,落实为 Compose 可验证硬上限,不创建 swapfile。 本 Detail 为合成验收内容,不含任何实际秘密值。",
+      "event_at": "2026-07-12T11:20:00+08:00",
+      "retrieval_text": "资源上限。Hindsight 3 GiB、PostgreSQL 1 GiB、Hippocampus MCP 与 worker 512 MiB,落实为 Compose 可验证硬上限,不创建 swapfile。 该条目属于 Pi5 192.168.2.41 上的 Hippocampus 记忆中枢一期实施范围,涉及 Hippocampus MCP、MD Vault、SQLite reservation 与 Outbox、单实例 index worker 以及 Hindsight v0.9.0 轻索引与召回的边界约定。稳定逻辑 URI 形如 memory://shared/commissioning/mem_20260808_SAMPLE,完整正文只保存在 MD Vault,索引只包含本检索文本与安全 metadata。",
+      "retrieval_tokens": 188,
+      "seq": 17,
+      "summary": "资源上限:Hindsight 3 GiB、PostgreSQL 1 GiB、Hippocampus MCP 与 worker 512 MiB,落实为 Compose 可验证硬上限,不创建 swapfile。资源上限:Hindsight 3 GiB、PostgreSQL 1 GiB、Hippocamp",
+      "title": "资源上限",
+      "type": "fact"
+    },
+    {
+      "assigned_client": "dockerNode-openclaw",
+      "detail_body": "三容器禁止 privileged 与 host namespace,MCP 与 Hindsight 使用固定非 root UID、no-new-privileges、cap_drop ALL 与只读 rootfs 加精确 writable mount。 本 Detail 为合成验收内容,不含任何实际秘密值。",
+      "event_at": null,
+      "retrieval_text": "只读 rootfs 与能力。三容器禁止 privileged 与 host namespace,MCP 与 Hindsight 使用固定非 root UID、no-new-privileges、cap_drop ALL 与只读 rootfs 加精确 writable mount。 该条目属于 Pi5 192.168.2.41 上的 Hippocampus 记忆中枢一期实施范围,涉及 Hippocampus MCP、MD Vault、SQLite reservation 与 Outbox、单实例 index worker 以及 Hindsight v0.9.0 轻索引与召回的边界约定。稳定逻辑 URI 形如 memory://shared/commissioning/mem_20260808_SAMPLE,完整正文只保存在 MD Vault,索引只包含本检索文本与安全 metadata。",
+      "retrieval_tokens": 194,
+      "seq": 18,
+      "summary": "只读 rootfs 与能力:三容器禁止 privileged 与 host namespace,MCP 与 Hindsight 使用固定非 root UID、no-new-privileges、cap_drop ALL 与只读 rootfs 加精确 writable mount。只读 rootfs ",
+      "title": "只读 rootfs 与能力",
+      "type": "constraint"
+    },
+    {
+      "assigned_client": "mac-claude",
+      "detail_body": "HINDSIGHT_API_OTEL_TRACES_ENABLED 与 LLM_TRACE 必须显式关闭,exporter endpoint 与 headers 均不得出现在 service env,验证 llm_requests 无请求响应副本。 本 Detail 为合成验收内容,不含任何实际秘密值。",
+      "event_at": null,
+      "retrieval_text": "OTEL 与 trace 关闭。HINDSIGHT_API_OTEL_TRACES_ENABLED 与 LLM_TRACE 必须显式关闭,exporter endpoint 与 headers 均不得出现在 service env,验证 llm_requests 无请求响应副本。 该条目属于 Pi5 192.168.2.41 上的 Hippocampus 记忆中枢一期实施范围,涉及 Hippocampus MCP、MD Vault、SQLite reservation 与 Outbox、单实例 index worker 以及 Hindsight v0.9.0 轻索引与召回的边界约定。稳定逻辑 URI 形如 memory://shared/commissioning/mem_20260808_SAMPLE,完整正文只保存在 MD Vault,索引只包含本检索文本与安全 metadata。",
+      "retrieval_tokens": 201,
+      "seq": 19,
+      "summary": "OTEL 与 trace 关闭:HINDSIGHT_API_OTEL_TRACES_ENABLED 与 LLM_TRACE 必须显式关闭,exporter endpoint 与 headers 均不得出现在 service env,验证 llm_requests 无请求响应副本。OTEL 与 tra",
+      "title": "OTEL 与 trace 关闭",
+      "type": "decision"
+    },
+    {
+      "assigned_client": "mac-codex",
+      "detail_body": "稳定 URI memory://shared/项目/文档 唯一映射到 Vault 的 shared 项目目录下同名 md 文件,不存在 projects 或 inbox 等特例目录。 本 Detail 为合成验收内容,不含任何实际秘密值。",
+      "event_at": null,
+      "retrieval_text": "Vault 唯一映射。稳定 URI memory://shared/项目/文档 唯一映射到 Vault 的 shared 项目目录下同名 md 文件,不存在 projects 或 inbox 等特例目录。 该条目属于 Pi5 192.168.2.41 上的 Hippocampus 记忆中枢一期实施范围,涉及 Hippocampus MCP、MD Vault、SQLite reservation 与 Outbox、单实例 index worker 以及 Hindsight v0.9.0 轻索引与召回的边界约定。稳定逻辑 URI 形如 memory://shared/commissioning/mem_20260808_SAMPLE,完整正文只保存在 MD Vault,索引只包含本检索文本与安全 metadata。",
+      "retrieval_tokens": 195,
+      "seq": 20,
+      "summary": "Vault 唯一映射:稳定 URI memory://shared/项目/文档 唯一映射到 Vault 的 shared 项目目录下同名 md 文件,不存在 projects 或 inbox 等特例目录。Vault 唯一映射:稳定 URI memory://shared/项目/文档 唯一映射到 Va",
+      "title": "Vault 唯一映射",
+      "type": "fact"
+    },
+    {
+      "assigned_client": "dockerNode-openclaw",
+      "detail_body": "memory_read 单次最多 2 篇,单 URI 上限 192 KiB,总响应上限 256 KiB,超限返回安全错误并建议拆分主题,不做静默截断。 本 Detail 为合成验收内容,不含任何实际秘密值。",
+      "event_at": null,
+      "retrieval_text": "读取上限。memory_read 单次最多 2 篇,单 URI 上限 192 KiB,总响应上限 256 KiB,超限返回安全错误并建议拆分主题,不做静默截断。 该条目属于 Pi5 192.168.2.41 上的 Hippocampus 记忆中枢一期实施范围,涉及 Hippocampus MCP、MD Vault、SQLite reservation 与 Outbox、单实例 index worker 以及 Hindsight v0.9.0 轻索引与召回的边界约定。稳定逻辑 URI 形如 memory://shared/commissioning/mem_20260808_SAMPLE,完整正文只保存在 MD Vault,索引只包含本检索文本与安全 metadata。",
+      "retrieval_tokens": 202,
+      "seq": 21,
+      "summary": "读取上限:memory_read 单次最多 2 篇,单 URI 上限 192 KiB,总响应上限 256 KiB,超限返回安全错误并建议拆分主题,不做静默截断。读取上限:memory_read 单次最多 2 篇,单 URI 上限 192 KiB,总响应上限 256 KiB,超限返回安全错误并建议拆分",
+      "title": "读取上限",
+      "type": "constraint"
+    },
+    {
+      "assigned_client": "mac-claude",
+      "detail_body": "每个 HTTP 请求只接受一个 JSON-RPC object,拒绝 batch array、压缩 body、未知 Content-Type、重复键与尾随数据,body 上限 256 KiB、depth 上限 8。 本 Detail 为合成验收内容,不含任何实际秘密值。",
+      "event_at": null,
+      "retrieval_text": "JSON-RPC 限型。每个 HTTP 请求只接受一个 JSON-RPC object,拒绝 batch array、压缩 body、未知 Content-Type、重复键与尾随数据,body 上限 256 KiB、depth 上限 8。 该条目属于 Pi5 192.168.2.41 上的 Hippocampus 记忆中枢一期实施范围,涉及 Hippocampus MCP、MD Vault、SQLite reservation 与 Outbox、单实例 index worker 以及 Hindsight v0.9.0 轻索引与召回的边界约定。稳定逻辑 URI 形如 memory://shared/commissioning/mem_20260808_SAMPLE,完整正文只保存在 MD Vault,索引只包含本检索文本与安全 metadata。",
+      "retrieval_tokens": 200,
+      "seq": 22,
+      "summary": "JSON-RPC 限型:每个 HTTP 请求只接受一个 JSON-RPC object,拒绝 batch array、压缩 body、未知 Content-Type、重复键与尾随数据,body 上限 256 KiB、depth 上限 8。JSON-RPC 限型:每个 HTTP 请求只接受一个 JSO",
+      "title": "JSON-RPC 限型",
+      "type": "procedure"
+    },
+    {
+      "assigned_client": "mac-codex",
+      "detail_body": "startup recovery 对 prepared 事件按当前扫描策略重扫,通过才补 rename 与 ready,命中秘密标 policy_blocked,hash 不符标 conflict。 本 Detail 为合成验收内容,不含任何实际秘密值。",
+      "event_at": null,
+      "retrieval_text": "恢复策略重扫。startup recovery 对 prepared 事件按当前扫描策略重扫,通过才补 rename 与 ready,命中秘密标 policy_blocked,hash 不符标 conflict。 该条目属于 Pi5 192.168.2.41 上的 Hippocampus 记忆中枢一期实施范围,涉及 Hippocampus MCP、MD Vault、SQLite reservation 与 Outbox、单实例 index worker 以及 Hindsight v0.9.0 轻索引与召回的边界约定。稳定逻辑 URI 形如 memory://shared/commissioning/mem_20260808_SAMPLE,完整正文只保存在 MD Vault,索引只包含本检索文本与安全 metadata。",
+      "retrieval_tokens": 194,
+      "seq": 23,
+      "summary": "恢复策略重扫:startup recovery 对 prepared 事件按当前扫描策略重扫,通过才补 rename 与 ready,命中秘密标 policy_blocked,hash 不符标 conflict。恢复策略重扫:startup recovery 对 prepared 事件按当前扫描策略",
+      "title": "恢复策略重扫",
+      "type": "procedure"
+    },
+    {
+      "assigned_client": "dockerNode-openclaw",
+      "detail_body": "无 reservation 与 Outbox provenance 的 Vault 文件与 staging 一律计为 unowned_orphan,禁止读取、索引与补事件,也不自动删除。 本 Detail 为合成验收内容,不含任何实际秘密值。",
+      "event_at": null,
+      "retrieval_text": "孤儿文件处置。无 reservation 与 Outbox provenance 的 Vault 文件与 staging 一律计为 unowned_orphan,禁止读取、索引与补事件,也不自动删除。 该条目属于 Pi5 192.168.2.41 上的 Hippocampus 记忆中枢一期实施范围,涉及 Hippocampus MCP、MD Vault、SQLite reservation 与 Outbox、单实例 index worker 以及 Hindsight v0.9.0 轻索引与召回的边界约定。稳定逻辑 URI 形如 memory://shared/commissioning/mem_20260808_SAMPLE,完整正文只保存在 MD Vault,索引只包含本检索文本与安全 metadata。",
+      "retrieval_tokens": 190,
+      "seq": 24,
+      "summary": "孤儿文件处置:无 reservation 与 Outbox provenance 的 Vault 文件与 staging 一律计为 unowned_orphan,禁止读取、索引与补事件,也不自动删除。孤儿文件处置:无 reservation 与 Outbox provenance 的 Vault 文",
+      "title": "孤儿文件处置",
+      "type": "constraint"
+    },
+    {
+      "assigned_client": "mac-claude",
+      "detail_body": "记忆中枢任何故障都不得阻塞 Agent 完成当前用户任务,Agent 应跳过记忆步骤继续执行。 本 Detail 为合成验收内容,不含任何实际秘密值。",
+      "event_at": null,
+      "retrieval_text": "降级不阻塞任务。记忆中枢任何故障都不得阻塞 Agent 完成当前用户任务,Agent 应跳过记忆步骤继续执行。 该条目属于 Pi5 192.168.2.41 上的 Hippocampus 记忆中枢一期实施范围,涉及 Hippocampus MCP、MD Vault、SQLite reservation 与 Outbox、单实例 index worker 以及 Hindsight v0.9.0 轻索引与召回的边界约定。稳定逻辑 URI 形如 memory://shared/commissioning/mem_20260808_SAMPLE,完整正文只保存在 MD Vault,索引只包含本检索文本与安全 metadata。",
+      "retrieval_tokens": 194,
+      "seq": 25,
+      "summary": "降级不阻塞任务:记忆中枢任何故障都不得阻塞 Agent 完成当前用户任务,Agent 应跳过记忆步骤继续执行。降级不阻塞任务:记忆中枢任何故障都不得阻塞 Agent 完成当前用户任务,Agent 应跳过记忆步骤继续执行。降级不阻塞任务:记忆中枢任何故障都不得阻塞 Agent 完成当前用户任务,Age",
+      "title": "降级不阻塞任务",
+      "type": "decision"
+    },
+    {
+      "assigned_client": "mac-codex",
+      "detail_body": "mac-claude、mac-codex 与 dockerNode-openclaw 使用各自独立的 256 位随机 Token,服务端只保存 HMAC-SHA-256 加独立 pepper 的哈希。 本 Detail 为合成验收内容,不含任何实际秘密值。",
+      "event_at": null,
+      "retrieval_text": "三端身份分离。mac-claude、mac-codex 与 dockerNode-openclaw 使用各自独立的 256 位随机 Token,服务端只保存 HMAC-SHA-256 加独立 pepper 的哈希。 该条目属于 Pi5 192.168.2.41 上的 Hippocampus 记忆中枢一期实施范围,涉及 Hippocampus MCP、MD Vault、SQLite reservation 与 Outbox、单实例 index worker 以及 Hindsight v0.9.0 轻索引与召回的边界约定。稳定逻辑 URI 形如 memory://shared/commissioning/mem_20260808_SAMPLE,完整正文只保存在 MD Vault,索引只包含本检索文本与安全 metadata。",
+      "retrieval_tokens": 200,
+      "seq": 26,
+      "summary": "三端身份分离:mac-claude、mac-codex 与 dockerNode-openclaw 使用各自独立的 256 位随机 Token,服务端只保存 HMAC-SHA-256 加独立 pepper 的哈希。三端身份分离:mac-claude、mac-codex 与 dockerNode-op",
+      "title": "三端身份分离",
+      "type": "fact"
+    },
+    {
+      "assigned_client": "dockerNode-openclaw",
+      "detail_body": "main 与隔离 Bank 均显式锁定 store_document_text 为 false、audit_log_enabled 为 false,并在启动时读取 config 复核,普通 Agent 无法修改。 本 Detail 为合成验收内容,不含任何实际秘密值。",
+      "event_at": null,
+      "retrieval_text": "Bank 配置锁定。main 与隔离 Bank 均显式锁定 store_document_text 为 false、audit_log_enabled 为 false,并在启动时读取 config 复核,普通 Agent 无法修改。 该条目属于 Pi5 192.168.2.41 上的 Hippocampus 记忆中枢一期实施范围,涉及 Hippocampus MCP、MD Vault、SQLite reservation 与 Outbox、单实例 index worker 以及 Hindsight v0.9.0 轻索引与召回的边界约定。稳定逻辑 URI 形如 memory://shared/commissioning/mem_20260808_SAMPLE,完整正文只保存在 MD Vault,索引只包含本检索文本与安全 metadata。",
+      "retrieval_tokens": 198,
+      "seq": 27,
+      "summary": "Bank 配置锁定:main 与隔离 Bank 均显式锁定 store_document_text 为 false、audit_log_enabled 为 false,并在启动时读取 config 复核,普通 Agent 无法修改。Bank 配置锁定:main 与隔离 Bank 均显式锁定 stor",
+      "title": "Bank 配置锁定",
+      "type": "procedure"
+    },
+    {
+      "assigned_client": "mac-claude",
+      "detail_body": "worker 指数退避从 5 秒起,上限 15 分钟,第 8 次失败后进入 dead,只保留状态与枚举错误码,不复制 payload。 本 Detail 为合成验收内容,不含任何实际秘密值。",
+      "event_at": null,
+      "retrieval_text": "失败退避。worker 指数退避从 5 秒起,上限 15 分钟,第 8 次失败后进入 dead,只保留状态与枚举错误码,不复制 payload。 该条目属于 Pi5 192.168.2.41 上的 Hippocampus 记忆中枢一期实施范围,涉及 Hippocampus MCP、MD Vault、SQLite reservation 与 Outbox、单实例 index worker 以及 Hindsight v0.9.0 轻索引与召回的边界约定。稳定逻辑 URI 形如 memory://shared/commissioning/mem_20260808_SAMPLE,完整正文只保存在 MD Vault,索引只包含本检索文本与安全 metadata。",
+      "retrieval_tokens": 195,
+      "seq": 28,
+      "summary": "失败退避:worker 指数退避从 5 秒起,上限 15 分钟,第 8 次失败后进入 dead,只保留状态与枚举错误码,不复制 payload。失败退避:worker 指数退避从 5 秒起,上限 15 分钟,第 8 次失败后进入 dead,只保留状态与枚举错误码,不复制 payload。失败退避:w",
+      "title": "失败退避",
+      "type": "fact"
+    },
+    {
+      "assigned_client": "mac-codex",
+      "detail_body": "审计默认保留 90 天,JSONL 只导出到 state 下的 audit-export 目录,目录 0700、文件 0600,采用临时文件加 fsync 加 rename,不进 Vault 或远程端点。 本 Detail 为合成验收内容,不含任何实际秘密值。",
+      "event_at": null,
+      "retrieval_text": "审计导出。审计默认保留 90 天,JSONL 只导出到 state 下的 audit-export 目录,目录 0700、文件 0600,采用临时文件加 fsync 加 rename,不进 Vault 或远程端点。 该条目属于 Pi5 192.168.2.41 上的 Hippocampus 记忆中枢一期实施范围,涉及 Hippocampus MCP、MD Vault、SQLite reservation 与 Outbox、单实例 index worker 以及 Hindsight v0.9.0 轻索引与召回的边界约定。稳定逻辑 URI 形如 memory://shared/commissioning/mem_20260808_SAMPLE,完整正文只保存在 MD Vault,索引只包含本检索文本与安全 metadata。",
+      "retrieval_tokens": 204,
+      "seq": 29,
+      "summary": "审计导出:审计默认保留 90 天,JSONL 只导出到 state 下的 audit-export 目录,目录 0700、文件 0600,采用临时文件加 fsync 加 rename,不进 Vault 或远程端点。审计导出:审计默认保留 90 天,JSONL 只导出到 state 下的 audit-",
+      "title": "审计导出",
+      "type": "procedure"
+    },
+    {
+      "assigned_client": "dockerNode-openclaw",
+      "detail_body": "一期不得把 192.168.2.41 的 Claude CLI Gateway 用作任何配置、路由、模型端点或测试目标,也不得探测其端口、进程或健康状态。 本 Detail 为合成验收内容,不含任何实际秘密值。",
+      "event_at": null,
+      "retrieval_text": "Gateway 排除。一期不得把 192.168.2.41 的 Claude CLI Gateway 用作任何配置、路由、模型端点或测试目标,也不得探测其端口、进程或健康状态。 该条目属于 Pi5 192.168.2.41 上的 Hippocampus 记忆中枢一期实施范围,涉及 Hippocampus MCP、MD Vault、SQLite reservation 与 Outbox、单实例 index worker 以及 Hindsight v0.9.0 轻索引与召回的边界约定。稳定逻辑 URI 形如 memory://shared/commissioning/mem_20260808_SAMPLE,完整正文只保存在 MD Vault,索引只包含本检索文本与安全 metadata。",
+      "retrieval_tokens": 200,
+      "seq": 30,
+      "summary": "Gateway 排除:一期不得把 192.168.2.41 的 Claude CLI Gateway 用作任何配置、路由、模型端点或测试目标,也不得探测其端口、进程或健康状态。Gateway 排除:一期不得把 192.168.2.41 的 Claude CLI Gateway 用作任何配置、路由、模",
+      "title": "Gateway 排除",
+      "type": "constraint"
+    },
+    {
+      "assigned_client": "mac-claude",
+      "detail_body": "文本检索扩展使用 simple 作为兼容基线,一期以真实中文召回集验证,不足则记录为后续 PGroonga 或 VectorChord 评估项,不在正式 Bank 原地更换后端。 本 Detail 为合成验收内容,不含任何实际秘密值。",
+      "event_at": null,
+      "retrieval_text": "中文召回基线。文本检索扩展使用 simple 作为兼容基线,一期以真实中文召回集验证,不足则记录为后续 PGroonga 或 VectorChord 评估项,不在正式 Bank 原地更换后端。 该条目属于 Pi5 192.168.2.41 上的 Hippocampus 记忆中枢一期实施范围,涉及 Hippocampus MCP、MD Vault、SQLite reservation 与 Outbox、单实例 index worker 以及 Hindsight v0.9.0 轻索引与召回的边界约定。稳定逻辑 URI 形如 memory://shared/commissioning/mem_20260808_SAMPLE,完整正文只保存在 MD Vault,索引只包含本检索文本与安全 metadata。",
+      "retrieval_tokens": 213,
+      "seq": 31,
+      "summary": "中文召回基线:文本检索扩展使用 simple 作为兼容基线,一期以真实中文召回集验证,不足则记录为后续 PGroonga 或 VectorChord 评估项,不在正式 Bank 原地更换后端。中文召回基线:文本检索扩展使用 simple 作为兼容基线,一期以真实中文召回集验证,不足则记录为后续 PG",
+      "title": "中文召回基线",
+      "type": "fact"
+    },
+    {
+      "assigned_client": "mac-codex",
+      "detail_body": "三客户端配置备份本体与完整性摘要只留在各自原安全域或独立 0700 非 Git 目录,项目交付物只记录安全备份 ID、路径、时间、权限与回滚结果。 本 Detail 为合成验收内容,不含任何实际秘密值。",
+      "event_at": null,
+      "retrieval_text": "客户端备份边界。三客户端配置备份本体与完整性摘要只留在各自原安全域或独立 0700 非 Git 目录,项目交付物只记录安全备份 ID、路径、时间、权限与回滚结果。 该条目属于 Pi5 192.168.2.41 上的 Hippocampus 记忆中枢一期实施范围,涉及 Hippocampus MCP、MD Vault、SQLite reservation 与 Outbox、单实例 index worker 以及 Hindsight v0.9.0 轻索引与召回的边界约定。稳定逻辑 URI 形如 memory://shared/commissioning/mem_20260808_SAMPLE,完整正文只保存在 MD Vault,索引只包含本检索文本与安全 metadata。",
+      "retrieval_tokens": 214,
+      "seq": 32,
+      "summary": "客户端备份边界:三客户端配置备份本体与完整性摘要只留在各自原安全域或独立 0700 非 Git 目录,项目交付物只记录安全备份 ID、路径、时间、权限与回滚结果。客户端备份边界:三客户端配置备份本体与完整性摘要只留在各自原安全域或独立 0700 非 Git 目录,项目交付物只记录安全备份 ID、路径",
+      "title": "客户端备份边界",
+      "type": "procedure"
+    }
+  ]
+}
