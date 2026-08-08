@@ -80,6 +80,10 @@ def test_search_merges_multiple_facts_into_one_card(lab, key):
                          "tags", "source_agent", "trust", "event_at", "index_state"}
     assert card["index_state"] == "indexed"
     assert "## Detail" not in json.dumps(card, ensure_ascii=False)
+    # `text`/`scores.final` are the real v0.9.0 field names; reading the wrong
+    # ones silently produced empty snippets and flat ranking in Phase 1.
+    assert card["safe_snippet"], "snippet must be populated from the fact body"
+    assert card["event_at"] != "1999-01-01T00:00:00+00:00"  # mentioned_at must not leak
 
 
 def test_search_caps_at_five_unique_documents(lab, key):

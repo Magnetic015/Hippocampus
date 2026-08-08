@@ -113,14 +113,19 @@ class MockHindsight:
                 continue
             halves = [content[: len(content) // 2], content[len(content) // 2:]]
             for i, part in enumerate(h for h in halves if h):
+                # Field names mirror real Hindsight v0.9.0 recall: the fact body
+                # is `text` and ranking lives under `scores.final`. Verified
+                # against the deployed 0.9.0 API on 2026-08-08; keep in sync or
+                # the pipeline tests validate a shape that does not exist.
                 results.append({
                     "document_id": doc["document_id"],
-                    "content": part,
-                    "score": score - i * 0.01,
+                    "text": part,
+                    "scores": {"final": score - i * 0.01, "semantic": score, "keyword": score},
+                    "mentioned_at": "1999-01-01T00:00:00+00:00",  # must never reach a card
                     "metadata": doc["metadata"],
                     "tags": doc["tags"],
                 })
-        results.sort(key=lambda r: r["score"], reverse=True)
+        results.sort(key=lambda r: r["scores"]["final"], reverse=True)
         return {"results": results[:32]}
 
 

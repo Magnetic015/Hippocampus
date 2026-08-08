@@ -338,6 +338,17 @@ def memory_search(env, ctx, args: dict) -> dict:
         raise ToolError(C.E_INDEX_UNAVAILABLE, state="error", outcome="index_unavailable",
                         retryable=True) from None
 
+    def fact_text(f: dict) -> str:
+        # Hindsight v0.9.0 recall returns the fact body as `text`.
+        return f.get("text") or f.get("content") or ""
+
+    def fact_score(f: dict) -> float:
+        # ...and its ranking under `scores.final` (plan §7.1 sorts on final).
+        scores = f.get("scores")
+        if isinstance(scores, dict):
+            return float(scores.get("final", 0.0))
+        return float(f.get("score", 0.0))
+
     groups: dict[str, dict] = {}
     for fact in raw.get("results", []):
         doc = fact.get("document_id")
@@ -366,21 +377,20 @@ def memory_search(env, ctx, args: dict) -> dict:
         uris = {(f.get("metadata") or {}).get("uri") for f in group["facts"]}
         if len(metas) > 1 or len(tagsets) > 1 or len(uris) > 1:
             continue
-        best = max(group["facts"], key=lambda f: f.get("score", 0.0))
+        best = max(group["facts"], key=fact_score)
         meta = best.get("metadata") or {}
-        card_texts = [meta.get("index_title", ""), meta.get("index_summary", ""),
-                      best.get("content", "")]
+        card_texts = [meta.get("index_title", ""), meta.get("index_summary", ""), fact_text(best)]
         if any(env.scan_text(t) for t in card_texts if t):
             continue
         res_row, out_row = sm.status_by_ref(ctx.conn, document_id=doc)
         index_state = (C.index_state_projection(out_row["status"] if out_row else None,
                                                 res_row["state"]) if res_row else "conflict")
         cards.append({
-            "score": best.get("score", 0.0),
+            "score": fact_score(best),
             "card": {
                 "document_id": doc, "uri": meta.get("uri"),
                 "index_title": meta.get("index_title"), "index_summary": meta.get("index_summary"),
-                "safe_snippet": best.get("content", "")[:512],
+                "safe_snippet": fact_text(best)[:512],
                 "tags": sorted(best.get("tags") or []), "source_agent": meta.get("source_agent"),
                 "trust": meta.get("trust"), "event_at": meta.get("event_at"),
                 "index_state": index_state,
