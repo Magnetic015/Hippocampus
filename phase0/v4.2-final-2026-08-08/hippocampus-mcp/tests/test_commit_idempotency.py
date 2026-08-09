@@ -138,7 +138,7 @@ def test_nonzero_fraction_legacy_utc_suffix_migrates(lab, key):
         conn.close()
 
     _, replay, is_error = lab.call(
-        "memory_commit", commit_args(k, event_at="2026-08-01T01:30:00.123+00:00"))
+        "memory_commit", commit_args(k, event_at="2026-08-01T01:30:00.1230+00:00"))
     assert not is_error and replay["document_id"] == first["document_id"]
 
 

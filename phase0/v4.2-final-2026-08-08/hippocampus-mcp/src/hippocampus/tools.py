@@ -233,8 +233,28 @@ def memory_commit(env, ctx, args: dict) -> dict:
             for suffix in utc_suffixes:
                 if raw_event_at.endswith(suffix):
                     raw_utc_prefix = raw_event_at[:-len(suffix)]
+                    equivalent_prefixes = {raw_utc_prefix}
+                    fraction_head, dot, fraction = raw_utc_prefix.rpartition(".")
+                    if (dot and fraction.isascii() and fraction.isdigit()):
+                        significant = fraction.rstrip("0")
+                        max_precision = max(9, len(fraction))
+                        if significant:
+                            equivalent_prefixes.update(
+                                fraction_head + "." + significant
+                                + ("0" * (precision - len(significant)))
+                                for precision in range(len(significant), max_precision + 1))
+                        else:
+                            equivalent_prefixes.add(fraction_head)
+                            equivalent_prefixes.update(
+                                fraction_head + "." + ("0" * precision)
+                                for precision in range(1, max_precision + 1))
+                    else:
+                        equivalent_prefixes.update(
+                            raw_utc_prefix + "." + ("0" * precision)
+                            for precision in range(1, 10))
                     legacy_event_values.update(
-                        raw_utc_prefix + candidate for candidate in utc_suffixes)
+                        prefix + candidate
+                        for prefix in equivalent_prefixes for candidate in utc_suffixes)
                     break
         utc_second = event_at[:-6]
         legacy_event_values.update(
