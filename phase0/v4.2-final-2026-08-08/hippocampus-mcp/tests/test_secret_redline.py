@@ -22,7 +22,14 @@ def _no_canary_anywhere(lab, needle=CANARY):
     state_dir = Path(lab.db_path).parent
     for path in list(state_dir.rglob("*")) + list(Path(lab.vault).rglob("*")):
         if path.is_file():
-            assert needle.encode() not in path.read_bytes(), f"canary leaked into {path.name}"
+            try:
+                data = path.read_bytes()
+            except FileNotFoundError:
+                # SQLite removes -wal/-shm when the last connection closes, so a
+                # file can disappear between the scan and the read. One that no
+                # longer exists cannot be holding the canary.
+                continue
+            assert needle.encode() not in data, f"canary leaked into {path.name}"
     for bank in lab.mock.banks.values():
         assert needle not in str(bank)
     assert all(needle not in str(item) for _, item in lab.mock.retain_log)
