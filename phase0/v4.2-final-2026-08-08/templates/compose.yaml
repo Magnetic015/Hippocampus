@@ -40,6 +40,10 @@ services:
     image: ghcr.io/vectorize-io/hindsight@sha256:${HINDSIGHT_DIGEST:?required}
     labels: *labels
     networks: [hippocampus-backend]
+    # Control Plane UI. Unauthenticated on the LAN — accepted residual risk,
+    # see DEPLOYMENT.md §13. The Hindsight API (8888) stays unpublished.
+    ports:
+      - "192.168.2.41:9999:9999"
     depends_on:
       db: {condition: service_healthy}
     user: "1000:1000"
@@ -52,12 +56,19 @@ services:
     environment:
       HINDSIGHT_API_DATABASE_URL: "postgresql://hippocampus:${HIPPOCAMPUS_DB_PASSWORD:?required}@db:5432/hindsight"
       HINDSIGHT_API_TENANT_API_KEY: ${HINDSIGHT_INTERNAL_TOKEN:?required}
+      # The Control Plane reaches the dataplane as a normal API client; it reuses
+      # the internal token rather than holding a second credential.
+      HINDSIGHT_CP_DATAPLANE_API_KEY: ${HINDSIGHT_INTERNAL_TOKEN:?required}
       HINDSIGHT_API_LLM_BASE_URL: ${CLIPROXY_OPENAI_BASE_URL:?required}
       HINDSIGHT_API_LLM_API_KEY: ${CLIPROXY_KEY:?required}
       HINDSIGHT_API_LLM_1_BASE_URL: ${CLIPROXY_OPENAI_BASE_URL:?required}
       HINDSIGHT_API_LLM_1_API_KEY: ${CLIPROXY_KEY:?required}
+      # The reflect primary inherits base_url/key from the global LLM, but the
+      # indexed member inherits nothing — it needs both spelled out.
+      HINDSIGHT_API_REFLECT_LLM_1_BASE_URL: ${CLIPROXY_OPENAI_BASE_URL:?required}
+      HINDSIGHT_API_REFLECT_LLM_1_API_KEY: ${CLIPROXY_KEY:?required}
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/health || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8888/health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -93,11 +104,13 @@ services:
       HIPPOCAMPUS_VAULT: /data/vault
       HIPPOCAMPUS_BIND_HOST: 0.0.0.0
       HIPPOCAMPUS_BIND_PORT: "8080"
-      HIPPOCAMPUS_HINDSIGHT_BASE: http://hindsight:8000
+      HIPPOCAMPUS_HINDSIGHT_BASE: http://hindsight:8888
+      HIPPOCAMPUS_RECALL_TIMEOUT_S: "20"
       HIPPOCAMPUS_HINDSIGHT_TOKEN: ${HINDSIGHT_INTERNAL_TOKEN:?required}
       HIPPOCAMPUS_TOKEN_PEPPER: ${HIPPOCAMPUS_TOKEN_PEPPER:?required}
       HIPPOCAMPUS_AUDIT_HMAC_KEY: ${HIPPOCAMPUS_AUDIT_HMAC_KEY:?required}
       HIPPOCAMPUS_IDEMPOTENCY_HMAC_KEY: ${HIPPOCAMPUS_IDEMPOTENCY_HMAC_KEY:?required}
+      HIPPOCAMPUS_TIKTOKEN_CACHE: /app/vendor/tiktoken-cache
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3).read()"]
       interval: 10s

@@ -20,10 +20,18 @@ SCRIPTS = TEMPLATES / "scripts"
 COMPOSE = (TEMPLATES / "compose.yaml").read_text(encoding="utf-8")
 
 
-def test_only_mcp_publishes_a_host_port():
-    ports = re.findall(r'^\s*-\s*"([^"]+:\d+:\d+)"', COMPOSE, re.M)
-    assert ports == ["192.168.2.41:8888:8080"]
-    assert "5432:" not in COMPOSE and "9999" not in COMPOSE
+def test_only_mcp_and_the_cp_publish_host_ports():
+    # The Control Plane (9999) was deliberately published on 2026-08-09 so the
+    # Reflect UI is reachable; it carries no authentication of its own, which is
+    # an accepted residual risk (DEPLOYMENT.md §13). Everything else stays
+    # unpublished — Postgres, and above all Hindsight's dataplane on 8888, which
+    # would hand out the whole bank without going through the MCP's authz.
+    ports = re.findall(r'^\s*-\s*"([\d.]+):(\d+):(\d+)"', COMPOSE, re.M)
+    assert [(host, container) for _, host, container in ports] == [
+        ("9999", "9999"), ("8888", "8080")]
+    assert {ip for ip, _, _ in ports} == {"192.168.2.41"}, "never bind 0.0.0.0"
+    assert "5432:" not in COMPOSE
+    assert not [c for _, _, c in ports if c == "8888"]
 
 
 def test_every_secret_is_explicitly_mapped_and_required():
@@ -34,13 +42,19 @@ def test_every_secret_is_explicitly_mapped_and_required():
 
 
 def test_numbered_llm_member_has_its_own_key():
+    # A numbered member inherits nothing — not the primary's key, not its
+    # base_url — and Hindsight raises at startup when the key is missing.
     assert "HINDSIGHT_API_LLM_1_API_KEY: ${CLIPROXY_KEY:?required}" in COMPOSE
+    assert "HINDSIGHT_API_REFLECT_LLM_1_API_KEY: ${CLIPROXY_KEY:?required}" in COMPOSE
+    assert ("HINDSIGHT_API_REFLECT_LLM_1_BASE_URL: ${CLIPROXY_OPENAI_BASE_URL:?required}"
+            in COMPOSE)
 
 
 def test_hindsight_env_file_is_mounted_and_secret_free():
     assert "- ./hindsight.env" in COMPOSE
     env = (TEMPLATES / "hindsight.env").read_text(encoding="utf-8")
-    assert "HINDSIGHT_ENABLE_CP=false" in env
+    # CP on since 2026-08-09 — see test_only_mcp_and_the_cp_publish_host_ports.
+    assert "HINDSIGHT_ENABLE_CP=true" in env
     assert "HINDSIGHT_API_OTEL_TRACES_ENABLED=false" in env
     assert "HINDSIGHT_API_LLM_TRACE_ENABLED=false" in env
     assert "HINDSIGHT_API_STORE_DOCUMENT_TEXT=false" in env
