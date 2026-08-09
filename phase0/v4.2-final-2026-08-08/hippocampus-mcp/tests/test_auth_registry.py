@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from harness import CLIENTS, PEPPER, commit_args
 
 from hippocampus import constants as C, registry
@@ -87,6 +89,87 @@ def test_rotation_renews_finite_expiry_but_preserves_permanent_clients(lab):
 
     assert lab.rpc("tools/list", token=finite_token)[0] == 200
     assert lab.rpc("tools/list", token=permanent_token)[0] == 200
+
+
+def test_atomic_provision_rolls_back_token_and_grants_when_binding_fails(lab, monkeypatch):
+    conn = lab.db()
+    new_token = "T" + "atomic-rollback" * 4
+    try:
+        conn.execute(
+            "UPDATE clients SET expires_at=? WHERE client_id='mac-codex'", (now() + 3600,))
+        before = dict(conn.execute(
+            "SELECT token_hash, token_version, readable_projects, writable_projects,"
+            " expires_at, revoked_at FROM clients WHERE client_id='mac-codex'"
+        ).fetchone())
+
+        def fail_binding(*_args, **_kwargs):
+            raise RuntimeError("synthetic bind failure")
+
+        monkeypatch.setattr(registry, "bind_peer", fail_binding)
+        with pytest.raises(RuntimeError, match="synthetic bind failure"):
+            registry.provision_client(
+                conn, "mac-codex", new_token, PEPPER, source_tag="mac-codex",
+                readable=["soul"], writable=["soul"], types=list(C.TYPES),
+                peer_ip="192.0.2.4", expires_days=14,
+            )
+
+        after = dict(conn.execute(
+            "SELECT token_hash, token_version, readable_projects, writable_projects,"
+            " expires_at, revoked_at FROM clients WHERE client_id='mac-codex'"
+        ).fetchone())
+        assert after == before
+        assert registry.find_client_by_token(conn, CLIENTS["mac-codex"], PEPPER) is not None
+        assert registry.find_client_by_token(conn, new_token, PEPPER) is None
+        assert conn.execute(
+            "SELECT 1 FROM client_sources WHERE client_id='mac-codex' AND canonical_ip='192.0.2.4'"
+        ).fetchone() is None
+    finally:
+        conn.close()
+
+
+def test_atomic_provision_updates_existing_client_and_issues_new_client(lab):
+    conn = lab.db()
+    try:
+        conn.execute("UPDATE clients SET expires_at=1 WHERE client_id='mac-codex'")
+        created = registry.provision_client(
+            conn, "mac-codex", "T" + "existing-provisioned" * 3, PEPPER,
+            source_tag="ignored-for-existing", readable=["soul"], writable=["soul"],
+            types=list(C.TYPES), peer_ip="192.0.2.4", expires_days=14,
+        )
+        assert created is False
+        existing = conn.execute(
+            "SELECT source_tag, readable_projects, writable_projects, expires_at"
+            " FROM clients WHERE client_id='mac-codex'"
+        ).fetchone()
+        assert existing["source_tag"] == "mac-codex"
+        assert json.loads(existing["readable_projects"]) == ["soul"]
+        assert json.loads(existing["writable_projects"]) == ["soul"]
+        assert existing["expires_at"] >= now() + 13 * 86400
+
+        created = registry.provision_client(
+            conn, "new-client", "T" + "newly-provisioned" * 4, PEPPER,
+            source_tag="new-client", readable=["soul"], writable=["soul"],
+            types=list(C.TYPES), peer_ip="192.0.2.5", expires_days=14,
+        )
+        assert created is True
+        new = conn.execute(
+            "SELECT expires_at FROM clients WHERE client_id='new-client'").fetchone()
+        assert new["expires_at"] >= now() + 13 * 86400
+        assert conn.execute(
+            "SELECT 1 FROM client_sources WHERE client_id='new-client'"
+            " AND canonical_ip='192.0.2.5' AND revoked_at IS NULL"
+        ).fetchone() is not None
+    finally:
+        conn.close()
+
+
+def test_revoke_unknown_client_is_rejected(lab):
+    conn = lab.db()
+    try:
+        with pytest.raises(AuthzError, match="NO_SUCH_CLIENT"):
+            registry.revoke_client(conn, "misspelled-client")
+    finally:
+        conn.close()
 
 
 def test_peer_revocation_causes_gate_denial(lab):
@@ -187,9 +270,11 @@ def test_registry_cli_never_prints_secrets(tmp_path, capsys, monkeypatch):
     token_file = tmp_path / "tok"
     token_file.write_text("T" + "s" * 60)
     token_file.chmod(0o600)
-    registry_cli.main(["--db", db, "issue", "c1", "--source-tag", "c1",
-                       "--readable", "p", "--writable", "p", "--token-file", str(token_file)])
-    registry_cli.main(["--db", db, "bind-peer", "c1", "192.168.2.9"])
+    registry_cli.main([
+        "--db", db, "provision", "c1", "--source-tag", "c1",
+        "--readable", "p", "--writable", "p", "--peer", "192.168.2.9",
+        "--expires-days", "14", "--token-file", str(token_file),
+    ])
     registry_cli.main(["--db", db, "list-safe"])
     out = capsys.readouterr().out
     assert "T" + "s" * 60 not in out and "token_hash" not in out

@@ -124,13 +124,8 @@ esac
   echo "invalid issue expiry" >&2; exit 2;
 }
 tok="$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')"
-# 已注册则轮换；未注册则 issue 自动注册（部署即自动注册 client_id）
-if ! printf '%s' "$tok" | docker exec -i "$CTN" python -m hippocampus.registry_cli --db "$DB" rotate "$CID" --renew-expires-days "$EXPIRES_DAYS" >/dev/null 2>&1; then
-  printf '%s' "$tok" | docker exec -i "$CTN" python -m hippocampus.registry_cli --db "$DB" issue "$CID" --source-tag "$CID" --readable "$PROJ" --writable "$PROJ" --expires-days "$EXPIRES_DAYS" >/dev/null
-else
-  docker exec "$CTN" python -m hippocampus.registry_cli --db "$DB" grant "$CID" --readable "$PROJ" --writable "$PROJ" >/dev/null
-fi
-docker exec "$CTN" python -m hippocampus.registry_cli --db "$DB" bind-peer "$CID" "$PEER" >/dev/null
+# issue/rotate + grant + bind 在 registry 的单个事务中全成或全退。
+printf '%s' "$tok" | docker exec -i "$CTN" python -m hippocampus.registry_cli --db "$DB" provision "$CID" --source-tag "$CID" --readable "$PROJ" --writable "$PROJ" --peer "$PEER" --expires-days "$EXPIRES_DAYS" >/dev/null
 printf '%s' "$tok"
 REMOTE
   then rm -f "$tmp"; die "Pi5 端注册/轮换失败（检查 SSH / docker / registry）"; fi

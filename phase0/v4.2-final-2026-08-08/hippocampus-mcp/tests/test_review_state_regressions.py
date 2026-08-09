@@ -43,6 +43,14 @@ def _outbox(lab):
         conn.close()
 
 
+def _reservation_state(lab):
+    conn = lab.db()
+    try:
+        return conn.execute("SELECT state FROM idempotency_reservation").fetchone()["state"]
+    finally:
+        conn.close()
+
+
 def test_expired_indexing_lease_is_atomically_reclaimed(lab_noworker, key):
     lab = lab_noworker
     lab.call("memory_commit", commit_args(key()))
@@ -130,6 +138,7 @@ def test_recovery_rejects_tampered_final_even_with_valid_staging(lab_noworker, k
 
     assert stats["hash_mismatch"] == 1 and stats["promoted"] == 0
     assert out["status"] == "conflict" and out["error_code"] == C.E_HASH_MISMATCH
+    assert _reservation_state(lab) == "conflict"
     assert final.read_bytes() == altered
     assert staging.exists()
 
@@ -147,6 +156,7 @@ def test_recovery_rejects_tampered_staging_even_with_valid_final(lab_noworker, k
 
     assert stats["hash_mismatch"] == 1 and stats["readied"] == 0
     assert out["status"] == "conflict" and out["error_code"] == C.E_HASH_MISMATCH
+    assert _reservation_state(lab) == "conflict"
     assert final.read_bytes() == expected
     assert staging.read_bytes() == b"externally altered staging"
 
@@ -173,6 +183,7 @@ def test_recovery_rejects_unsafe_staging_artifact(lab_noworker, key, unsafe_kind
 
     assert stats["hash_mismatch"] == 1 and stats["promoted"] == 0
     assert out["status"] == "conflict" and out["error_code"] == C.E_HASH_MISMATCH
+    assert _reservation_state(lab) == "conflict"
     assert not final.exists()
     if unsafe_kind == "symlink":
         assert staging.is_symlink()

@@ -66,6 +66,17 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--renew-expires-days", type=_positive_days, default=None)
     p.add_argument("--token-file", default=None)
 
+    p = sub.add_parser("provision")
+    p.add_argument("client_id")
+    p.add_argument("--source-tag", required=True)
+    p.add_argument("--readable", default="")
+    p.add_argument("--writable", default="")
+    p.add_argument("--types", default=",".join(("decision", "procedure", "fact", "incident",
+                                                "preference", "constraint", "reference")))
+    p.add_argument("--peer", required=True)
+    p.add_argument("--expires-days", type=_positive_days, required=True)
+    p.add_argument("--token-file", default=None)
+
     p = sub.add_parser("revoke")
     p.add_argument("client_id")
 
@@ -106,6 +117,16 @@ def main(argv: list[str] | None = None) -> int:
                 renew_expires_days=args.renew_expires_days,
             )
             print(json.dumps({"ok": True, "client_id": args.client_id}))
+        elif args.cmd == "provision":
+            created = registry.provision_client(
+                conn, args.client_id, _read_token(args), _pepper(),
+                source_tag=args.source_tag,
+                readable=[x for x in args.readable.split(",") if x],
+                writable=[x for x in args.writable.split(",") if x],
+                types=[x for x in args.types.split(",") if x],
+                peer_ip=args.peer, expires_days=args.expires_days,
+            )
+            print(json.dumps({"ok": True, "client_id": args.client_id, "created": created}))
         elif args.cmd == "revoke":
             registry.revoke_client(conn, args.client_id)
             print(json.dumps({"ok": True, "client_id": args.client_id}))

@@ -58,8 +58,46 @@ def rotate_token(conn: sqlite3.Connection, client_id: str, token: str, pepper: b
         raise AuthzError("NO_SUCH_CLIENT")
 
 
+def provision_client(conn: sqlite3.Connection, client_id: str, token: str, pepper: bytes, *,
+                     source_tag: str, readable: list[str], writable: list[str],
+                     types: list[str], peer_ip: str, expires_days: int) -> bool:
+    """Atomically issue/rotate, align grants, and bind a deployment peer.
+
+    Returns ``True`` for a newly issued client and ``False`` for a rotation.
+    Permanent existing clients keep their NULL expiry; finite clients receive a
+    fresh window.  Any grant or peer-binding failure rolls back the token change.
+    """
+    if expires_days <= 0:
+        raise ValueError("expires_days must be positive")
+    ipaddress.ip_address(peer_ip)  # reject fallible input before acquiring the write lock
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        existing = conn.execute(
+            "SELECT 1 FROM clients WHERE client_id=?", (client_id,)).fetchone()
+        created = existing is None
+        if created:
+            create_client(
+                conn, client_id, token, pepper, source_tag=source_tag,
+                readable=readable, writable=writable, types=types,
+                expires_at=now() + expires_days * 86400,
+            )
+        else:
+            rotate_token(
+                conn, client_id, token, pepper, renew_expires_days=expires_days)
+            set_grants(conn, client_id, readable=readable, writable=writable)
+        bind_peer(conn, client_id, peer_ip)
+        conn.execute("COMMIT")
+        return created
+    except BaseException:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+
+
 def revoke_client(conn: sqlite3.Connection, client_id: str) -> None:
-    conn.execute("UPDATE clients SET revoked_at=? WHERE client_id=?", (now(), client_id))
+    cur = conn.execute("UPDATE clients SET revoked_at=? WHERE client_id=?", (now(), client_id))
+    if cur.rowcount != 1:
+        raise AuthzError("NO_SUCH_CLIENT")
 
 
 def set_grants(conn: sqlite3.Connection, client_id: str, *, readable: list[str],

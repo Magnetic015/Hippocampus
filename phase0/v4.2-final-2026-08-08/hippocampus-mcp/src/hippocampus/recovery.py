@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import audit, statemachine as sm, vault
+from . import audit, constants as C, statemachine as sm, vault
 from .db import connect, now
 
 
@@ -37,8 +37,7 @@ def run_startup_recovery(env) -> dict:
             staging_ok = staging_exists and vault.artifact_matches(staging, out["desired_sha256"])
             if (final_exists and not final_ok) or (staging_exists and not staging_ok):
                 # bytes present but altered: never guess or overwrite (05 §5.3)
-                sm.set_outbox_status(conn, res["event_id"], "conflict",
-                                     error_code="HASH_MISMATCH", release_lease=True)
+                sm.mark_conflict(conn, res["event_id"], C.E_HASH_MISMATCH)
                 stats["hash_mismatch"] += 1
                 continue
             if final_ok:

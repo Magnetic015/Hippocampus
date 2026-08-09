@@ -141,7 +141,7 @@ def test_client_deploy_probe_keeps_bearer_token_out_of_argv():
     assert 'printf \'header = "Authorization: Bearer %s"' in auth_ok
 
 
-def test_client_installers_align_fresh_grants_with_mode_and_expire_new_clients():
+def test_client_installers_use_atomic_mode_aligned_provisioning():
     repo = ROOT.parents[1]
     shell = (repo / "deploy-hippocampus-client.sh").read_text(encoding="utf-8")
     powershell = (repo / "deploy-hippocampus-client.ps1").read_text(encoding="utf-8")
@@ -154,25 +154,19 @@ def test_client_installers_align_fresh_grants_with_mode_and_expire_new_clients()
         assert '[ "$PROJ" = auto ] && PROJ=soul' in script
         assert 'commissioning mode requires project=commissioning' in script
 
-        issue = next(line for line in script.splitlines()
-                     if "registry_cli" in line and " issue " in line)
-        rotate = next(line for line in script.splitlines()
-                      if "registry_cli" in line and " rotate " in line)
-        grant = next(line for line in script.splitlines()
-                     if "registry_cli" in line and " grant " in line)
-        bind = next(line for line in script.splitlines()
-                    if "registry_cli" in line and " bind-peer " in line)
-        assert '--expires-days "$EXPIRES_DAYS"' in issue
-        assert '--renew-expires-days "$EXPIRES_DAYS"' in rotate
-        assert '--readable "$PROJ" --writable "$PROJ"' in grant
-        assert "|| true" not in bind
+        provision = next(line for line in script.splitlines()
+                         if "registry_cli" in line and " provision " in line)
+        assert '--source-tag "$CID"' in provision
+        assert '--readable "$PROJ" --writable "$PROJ"' in provision
+        assert '--peer "$PEER"' in provision
+        assert '--expires-days "$EXPIRES_DAYS"' in provision
 
 
 @pytest.mark.parametrize("mode,expected_project", [
     ("commissioning", "commissioning"),
     ("production", "soul"),
 ])
-def test_shell_installer_fresh_issue_uses_runtime_mode_project_and_expiry(
+def test_shell_installer_provision_uses_runtime_mode_project_and_expiry(
         tmp_path, mode, expected_project):
     script = (ROOT.parents[1] / "deploy-hippocampus-client.sh").read_text(encoding="utf-8")
     remote = script.split("<<'REMOTE'\n", 1)[1].split("\nREMOTE", 1)[0]
@@ -182,9 +176,7 @@ def test_shell_installer_fresh_issue_uses_runtime_mode_project_and_expiry(
     fake_docker.write_text(
         "#!/usr/bin/env bash\n"
         "if [[ \" $* \" == *\" sh -c \"* ]]; then printf '%s' \"$FAKE_MODE\"; exit 0; fi\n"
-        "if [[ \" $* \" == *\" rotate \"* ]]; then exit 1; fi\n"
-        "if [[ \" $* \" == *\" issue \"* ]]; then printf '%s\\n' \"$*\" >\"$FAKE_LOG\"; cat >/dev/null; exit 0; fi\n"
-        "if [[ \" $* \" == *\" bind-peer \"* ]]; then exit 0; fi\n"
+        "if [[ \" $* \" == *\" provision \"* ]]; then printf '%s\\n' \"$*\" >\"$FAKE_LOG\"; cat >/dev/null; exit 0; fi\n"
         "exit 2\n",
         encoding="utf-8",
     )
@@ -199,9 +191,10 @@ def test_shell_installer_fresh_issue_uses_runtime_mode_project_and_expiry(
     )
 
     assert result.returncode == 0, result.stderr
-    issue_args = log.read_text(encoding="utf-8")
-    assert f"--readable {expected_project} --writable {expected_project}" in issue_args
-    assert "--expires-days 14" in issue_args
+    provision_args = log.read_text(encoding="utf-8")
+    assert f"--readable {expected_project} --writable {expected_project}" in provision_args
+    assert "--peer 192.0.2.4" in provision_args
+    assert "--expires-days 14" in provision_args
 
 
 def test_shell_installer_rejects_project_incompatible_with_commissioning(tmp_path):
@@ -228,7 +221,7 @@ def test_shell_installer_rejects_project_incompatible_with_commissioning(tmp_pat
     assert "commissioning mode requires project=commissioning" in result.stderr
 
 
-def test_shell_installer_rotation_refreshes_grants_and_requires_peer_binding(tmp_path):
+def test_shell_installer_atomic_provision_failure_returns_no_token(tmp_path):
     script = (ROOT.parents[1] / "deploy-hippocampus-client.sh").read_text(encoding="utf-8")
     remote = script.split("<<'REMOTE'\n", 1)[1].split("\nREMOTE", 1)[0]
     fake_bin = tmp_path / "bin"
@@ -238,10 +231,7 @@ def test_shell_installer_rotation_refreshes_grants_and_requires_peer_binding(tmp
         "#!/usr/bin/env bash\n"
         "if [[ \" $* \" == *\" sh -c \"* ]]; then printf production; exit 0; fi\n"
         "printf '%s\\n' \"$*\" >>\"$FAKE_LOG\"\n"
-        "if [[ \" $* \" == *\" rotate \"* ]]; then cat >/dev/null; exit 0; fi\n"
-        "if [[ \" $* \" == *\" grant \"* ]]; then exit 0; fi\n"
-        "if [[ \" $* \" == *\" bind-peer \"* ]]; then exit \"${FAKE_BIND_RC:-0}\"; fi\n"
-        "if [[ \" $* \" == *\" issue \"* ]]; then exit 99; fi\n"
+        "if [[ \" $* \" == *\" provision \"* ]]; then cat >/dev/null; exit \"${FAKE_PROVISION_RC:-0}\"; fi\n"
         "exit 2\n",
         encoding="utf-8",
     )
@@ -255,16 +245,15 @@ def test_shell_installer_rotation_refreshes_grants_and_requires_peer_binding(tmp
     )
     calls = log.read_text(encoding="utf-8")
     assert success.returncode == 0, success.stderr
-    assert "rotate existing-client --renew-expires-days 14" in calls
-    assert "grant existing-client --readable soul --writable soul" in calls
-    assert "bind-peer existing-client 192.0.2.4" in calls
-    assert " issue " not in f" {calls} "
+    assert "provision existing-client" in calls
+    assert "--readable soul --writable soul --peer 192.0.2.4 --expires-days 14" in calls
+    assert len(calls.splitlines()) == 1
 
     log.write_text("", encoding="utf-8")
     failed_bind = subprocess.run(
         ["bash", "-s", "--", "existing-client", "mcp", "db", "192.0.2.4", "auto", "14"],
         input=remote, text=True, capture_output=True,
-        env=dict(base_env, FAKE_BIND_RC="7"), check=False,
+        env=dict(base_env, FAKE_PROVISION_RC="7"), check=False,
     )
     assert failed_bind.returncode == 7
     assert failed_bind.stdout == ""  # the fresh token is not returned or installed
