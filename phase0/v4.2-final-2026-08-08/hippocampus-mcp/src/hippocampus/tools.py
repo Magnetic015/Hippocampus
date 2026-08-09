@@ -204,8 +204,20 @@ def memory_commit(env, ctx, args: dict) -> dict:
 
     cfields = {"title": args["title"], "summary": args["summary"],
                "retrieval_text": args["retrieval_text"], "detail_body": detail,
-               "event_at": args.get("event_at"), "project": project, "type": args["type"]}
+               "event_at": event_at, "project": project, "type": args["type"]}
     phmac = canonical.payload_hmac(env.idem_key, cfields)
+    # Accept and migrate hashes written before event_at normalization so a
+    # deployment upgrade does not turn an existing idempotent retry into a
+    # conflict.  New reservations always store the normalized HMAC.
+    compatible_phmacs = {phmac}
+    legacy_event_values = {args.get("event_at")}
+    if event_at == "unset":
+        legacy_event_values.update((None, "unset"))
+    elif event_at.endswith("+00:00"):
+        legacy_event_values.add(event_at[:-6] + "Z")
+    for legacy_event_at in legacy_event_values:
+        legacy_fields = dict(cfields, event_at=legacy_event_at)
+        compatible_phmacs.add(canonical.payload_hmac(env.idem_key, legacy_fields))
     conn = ctx.conn
 
     failpoints.hit("commit.reserve.before")
@@ -213,11 +225,17 @@ def memory_commit(env, ctx, args: dict) -> dict:
     try:
         res = sm.lookup_reservation(conn, ctx.client_id, args["idempotency_key"])
         if res is not None:
-            if res["canonical_version"] != C.CANONICAL_VERSION or res["payload_hmac"] != phmac:
+            if (res["canonical_version"] != C.CANONICAL_VERSION
+                    or res["payload_hmac"] not in compatible_phmacs):
                 conn.execute("COMMIT")
                 audit.finalize(conn, ctx.request_id, "rejected", "idempotency_conflict")
                 ctx.audit_done = True
                 raise ToolError(C.E_IDEMPOTENCY_CONFLICT, http_status=409)
+            if res["payload_hmac"] != phmac:
+                conn.execute(
+                    "UPDATE idempotency_reservation SET payload_hmac=? WHERE event_id=?",
+                    (phmac, res["event_id"]),
+                )
             audit.link_event(conn, ctx.request_id, res["root_request_id"], res["event_id"])
             resumable = (res["state"] in ("reserved", "retryable_failed")
                          and sm.take_reservation_lease(conn, res["event_id"], env.pid)
@@ -333,9 +351,37 @@ def _commit_files(env, ctx, res, args: dict, detail: str | None, event_at: str, 
                             retryable=True) from None
     try:
         failpoints.hit("commit.rename.before")
-        if staging.exists():
+        final_present = vault.artifact_exists(final)
+        staging_present = vault.artifact_exists(staging)
+        if final_present:
+            if not vault.artifact_matches(final, desired_sha):
+                sm.mark_conflict(conn, res["event_id"], C.E_HASH_MISMATCH)
+                _finalize_quiet(conn, ctx, "error", C.E_HASH_MISMATCH)
+                raise ToolError(C.E_HASH_MISMATCH, state="error")
+        elif staging_present:
+            if not vault.artifact_matches(staging, desired_sha):
+                sm.mark_conflict(conn, res["event_id"], C.E_HASH_MISMATCH)
+                _finalize_quiet(conn, ctx, "error", C.E_HASH_MISMATCH)
+                raise ToolError(C.E_HASH_MISMATCH, state="error")
             vault.promote_staging(staging, final)
+        else:
+            sm.mark_durability_gap(conn, res["event_id"])
+            env.health["durability_gap"] = True
+            _finalize_quiet(conn, ctx, "error", C.E_DURABILITY_GAP)
+            raise ToolError(C.E_DURABILITY_GAP, state="error")
+        if not vault.artifact_matches(final, desired_sha):
+            if vault.artifact_exists(final):
+                sm.mark_conflict(conn, res["event_id"], C.E_HASH_MISMATCH)
+                code = C.E_HASH_MISMATCH
+            else:
+                sm.mark_durability_gap(conn, res["event_id"])
+                env.health["durability_gap"] = True
+                code = C.E_DURABILITY_GAP
+            _finalize_quiet(conn, ctx, "error", code)
+            raise ToolError(code, state="error")
         failpoints.hit("commit.rename.after")
+    except ToolError:
+        raise
     except BaseException:
         _finalize_quiet(conn, ctx, "recovery_pending", "rename_failed")
         return {"accepted": True, "stored": False, "indexed": False,

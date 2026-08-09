@@ -40,9 +40,14 @@ class HindsightClient:
         )
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return json.loads(resp.read().decode("utf-8"))
+                decoded = json.loads(resp.read().decode("utf-8"))
+                if not isinstance(decoded, dict):
+                    raise HindsightError("UPSTREAM_5XX")
+                return decoded
         except urllib.error.HTTPError as exc:
             raise HindsightError("UPSTREAM_5XX" if exc.code >= 500 else "UPSTREAM_4XX") from None
+        except (UnicodeDecodeError, ValueError, RecursionError):
+            raise HindsightError("UPSTREAM_5XX") from None
         except (urllib.error.URLError, socket.timeout, ConnectionError, OSError):
             raise HindsightError("HINDSIGHT_TIMEOUT") from None
 

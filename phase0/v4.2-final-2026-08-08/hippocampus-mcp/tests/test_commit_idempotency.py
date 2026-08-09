@@ -7,7 +7,7 @@ from pathlib import Path
 
 from harness import commit_args
 
-from hippocampus import constants as C, vault
+from hippocampus import canonical, constants as C, vault
 from hippocampus.mdrender import parse_frontmatter
 
 
@@ -50,6 +50,76 @@ def test_same_key_same_payload_replays_same_event(lab, key):
     assert len({r["event_id"] for r in rows}) == 1
     assert len({r["root_request_id"] for r in rows}) == 1
     assert {r["state"] for r in rows} == {"ok", "idempotent_replay"}
+
+
+def test_semantically_equal_event_times_replay_and_migrate_legacy_hash(lab, key):
+    utc_key = key()
+    utc_z = commit_args(utc_key, event_at="2026-08-01T01:30:00Z")
+    _, first, is_error = lab.call("memory_commit", utc_z)
+    assert not is_error
+
+    legacy_utc_hmac = canonical.payload_hmac(
+        lab.env.idem_key,
+        {
+            "title": utc_z["title"],
+            "summary": utc_z["summary"],
+            "retrieval_text": utc_z["retrieval_text"],
+            "detail_body": utc_z["detail_body"],
+            "event_at": utc_z["event_at"],
+            "project": utc_z["project"],
+            "type": utc_z["type"],
+        },
+    )
+    conn = lab.db()
+    try:
+        conn.execute(
+            "UPDATE idempotency_reservation SET payload_hmac=? WHERE idempotency_key=?",
+            (legacy_utc_hmac, utc_key),
+        )
+    finally:
+        conn.close()
+
+    _, replay, is_error = lab.call(
+        "memory_commit", commit_args(utc_key, event_at="2026-08-01T01:30:00+00:00"))
+    assert not is_error and replay["document_id"] == first["document_id"]
+
+    unset_key = key()
+    unset_args = commit_args(unset_key)
+    _, unset_first, is_error = lab.call("memory_commit", unset_args)
+    assert not is_error
+    legacy_absent_hmac = canonical.payload_hmac(
+        lab.env.idem_key,
+        {
+            "title": unset_args["title"],
+            "summary": unset_args["summary"],
+            "retrieval_text": unset_args["retrieval_text"],
+            "detail_body": unset_args["detail_body"],
+            "event_at": None,
+            "project": unset_args["project"],
+            "type": unset_args["type"],
+        },
+    )
+    conn = lab.db()
+    try:
+        conn.execute(
+            "UPDATE idempotency_reservation SET payload_hmac=? WHERE idempotency_key=?",
+            (legacy_absent_hmac, unset_key),
+        )
+    finally:
+        conn.close()
+
+    _, unset_replay, is_error = lab.call(
+        "memory_commit", commit_args(unset_key, event_at="unset"))
+    assert not is_error and unset_replay["document_id"] == unset_first["document_id"]
+    conn = lab.db()
+    try:
+        migrated_hmac = conn.execute(
+            "SELECT payload_hmac FROM idempotency_reservation WHERE idempotency_key=?",
+            (unset_key,),
+        ).fetchone()["payload_hmac"]
+    finally:
+        conn.close()
+    assert migrated_hmac != legacy_absent_hmac
 
 
 def test_same_key_different_payload_is_conflict(lab, key):

@@ -242,6 +242,43 @@ def test_readyz_degraded_when_only_index_down(lab_noworker, key):
     assert set(body) == {"status", "reason"}  # no config/path/model/token
 
 
+def test_malformed_success_recall_degrades_as_index_unavailable(lab_noworker):
+    lab = lab_noworker
+    lab.mock.invalid_json_next()
+    _, error, is_error = lab.call(
+        "memory_search", {"query": "Hippocampus", "project": "commissioning"})
+    assert is_error and error["code"] == C.E_INDEX_UNAVAILABLE
+    assert lab.env.index_backend_down
+    status, body = lab.raw(b"", method="GET", url=lab.url.replace("/mcp/", "/readyz"))
+    assert status == 200 and body == {
+        "status": "degraded", "reason": "index_backend_unavailable"}
+
+
+def test_malformed_success_retain_releases_worker_lease_for_retry(lab_noworker, key):
+    lab = lab_noworker
+    _, committed, is_error = lab.call("memory_commit", commit_args(key()))
+    assert not is_error, committed
+    lab.mock.invalid_json_next()
+    from hippocampus.worker import Worker
+    assert Worker(lab.env).process_one()
+
+    conn = lab.db()
+    try:
+        row = dict(conn.execute(
+            "SELECT status, error_code, attempt, lease_owner, lease_expires_at FROM outbox"
+        ).fetchone())
+    finally:
+        conn.close()
+    assert row == {
+        "status": "retry_wait",
+        "error_code": "UPSTREAM_5XX",
+        "attempt": 1,
+        "lease_owner": None,
+        "lease_expires_at": None,
+    }
+    assert lab.env.index_backend_down and lab.mock.retain_log == []
+
+
 def test_commit_latency_under_index_outage(lab_noworker, key):
     lab = lab_noworker
     lab.mock.stop()

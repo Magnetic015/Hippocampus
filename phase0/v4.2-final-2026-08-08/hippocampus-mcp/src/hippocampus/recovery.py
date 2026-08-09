@@ -86,14 +86,7 @@ def run_startup_recovery(env) -> dict:
 
 
 def _artifact_exists(path: Path) -> bool:
-    """Unlike Path.exists(), count broken symlinks as existing unsafe artifacts."""
-    try:
-        path.lstat()
-    except FileNotFoundError:
-        return False
-    except OSError:
-        return True
-    return True
+    return vault.artifact_exists(path)
 
 
 def _mark_stored_ready(conn, event_id: str) -> None:

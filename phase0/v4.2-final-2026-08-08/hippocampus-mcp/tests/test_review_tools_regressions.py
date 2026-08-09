@@ -270,6 +270,44 @@ def test_retry_rejects_unvalidated_existing_staging(lab_noworker, key):
         conn.close()
 
 
+@pytest.mark.parametrize(
+    ("failure_kind", "expected_code"),
+    [
+        ("missing", C.E_DURABILITY_GAP),
+        ("dangling_symlink", C.E_HASH_MISMATCH),
+    ],
+)
+def test_commit_never_marks_missing_or_unsafe_staging_stored(
+        lab_noworker, key, monkeypatch, failure_kind, expected_code):
+    lab = lab_noworker
+    original_hit = failpoints.hit
+
+    def sabotage_staging(name):
+        if name != "commit.rename.before":
+            return original_hit(name)
+        staging = next(Path(lab.vault).rglob(".hippocampus-*.staging"))
+        staging.unlink()
+        if failure_kind == "dangling_symlink":
+            staging.symlink_to(Path(lab.tmp) / "missing-staging-target")
+
+    monkeypatch.setattr(failpoints, "hit", sabotage_staging)
+    _, error, is_error = lab.call("memory_commit", commit_args(key()))
+    assert is_error and error["code"] == expected_code
+
+    conn = lab.db()
+    try:
+        row = dict(conn.execute(
+            "SELECT r.state AS reservation_state, o.status, o.error_code, r.uri"
+            " FROM idempotency_reservation r JOIN outbox o USING(event_id)"
+        ).fetchone())
+    finally:
+        conn.close()
+    assert row["reservation_state"] == row["status"] == "conflict"
+    assert row["error_code"] == expected_code
+    project, document_id = vault.parse_uri(row["uri"])
+    assert not vault.doc_path(lab.vault, project, document_id).exists()
+
+
 def test_search_requires_authoritative_local_provenance_and_indexed_state(
         lab_noworker, key):
     lab = lab_noworker

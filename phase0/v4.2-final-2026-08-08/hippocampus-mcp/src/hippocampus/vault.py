@@ -95,6 +95,17 @@ def sha256_file(path: Path) -> str:
     return sha256_bytes(path.read_bytes())
 
 
+def artifact_exists(path: Path) -> bool:
+    """Count broken symlinks and other unsafe directory entries as present."""
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
 def read_artifact(path: Path, *, max_bytes: int) -> bytes:
     """Read one strict 0600 regular artifact without following symlinks."""
     try:

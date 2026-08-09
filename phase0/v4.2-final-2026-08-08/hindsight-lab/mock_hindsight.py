@@ -25,6 +25,7 @@ class MockHindsight:
         self.retain_log: list[tuple[str, dict]] = []
         self._fail = 0
         self._timeout = 0
+        self._invalid_json = 0
         self._lock = threading.Lock()
         self.httpd: ThreadingHTTPServer | None = None
 
@@ -37,11 +38,15 @@ class MockHindsight:
         with self._lock:
             self._timeout = n
 
+    def invalid_json_next(self, n: int = 1):
+        with self._lock:
+            self._invalid_json = n
+
     def clear(self):
         with self._lock:
             self.banks.clear()
             self.retain_log.clear()
-            self._fail = self._timeout = 0
+            self._fail = self._timeout = self._invalid_json = 0
 
     # server ----------------------------------------------------------------
     def start(self) -> str:
@@ -63,6 +68,9 @@ class MockHindsight:
                     if mock._fail > 0:
                         mock._fail -= 1
                         return self._reply(503, {"error": "injected"})
+                    if mock._invalid_json > 0:
+                        mock._invalid_json -= 1
+                        return self._reply_raw(200, b'{"truncated"')
                 length = int(self.headers.get("Content-Length") or 0)
                 body = json.loads(self.rfile.read(length).decode("utf-8"))
                 bank = m.group(1)
@@ -72,6 +80,9 @@ class MockHindsight:
 
             def _reply(self, status, payload):
                 data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+                return self._reply_raw(status, data)
+
+            def _reply_raw(self, status, data):
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(data)))
