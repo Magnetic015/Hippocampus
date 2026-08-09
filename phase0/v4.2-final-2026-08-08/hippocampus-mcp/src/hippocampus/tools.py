@@ -165,6 +165,46 @@ def _commit_response(res, out) -> dict:
     }
 
 
+def _render_commit_document(ctx, res, args: dict, detail: str | None,
+                            event_at: str, project: str) -> bytes:
+    return render(
+        {"id": res["document_id"], "title": args["title"], "summary": args["summary"],
+         "uri": res["uri"], "project": project, "source_agent": ctx.source_tag,
+         "scope": "shared", "trust": "agent", "sensitivity": "internal", "type": args["type"],
+         "created_at": res["document_created_at"], "updated_at": res["document_created_at"],
+         "event_at": event_at,
+         "tags": [f"src:{ctx.source_tag}", f"project:{project}", "scope:shared",
+                  "trust:agent", "sensitivity:internal", f"type:{args['type']}"]},
+        args["retrieval_text"], detail)
+
+
+def _legacy_payload_matches_durable_document(env, ctx, res, args: dict,
+                                             detail: str | None, event_at: str,
+                                             project: str) -> bool:
+    """Prove an old raw-input HMAC equivalent via the rendered document.
+
+    Pre-normalization HMACs cannot be inverted, and RFC3339 has too many
+    equivalent raw spellings to enumerate safely.  The committed Outbox hash
+    (or a strict artifact when preparation did not reach Outbox insertion) is
+    an authoritative comparison for every client-controlled document field.
+    """
+    desired_sha = vault.sha256_bytes(
+        _render_commit_document(ctx, res, args, detail, event_at, project))
+    out = ctx.conn.execute(
+        "SELECT desired_sha256 FROM outbox WHERE event_id=?", (res["event_id"],)
+    ).fetchone()
+    if out is not None:
+        return out["desired_sha256"] == desired_sha
+    try:
+        artifact_project, document_id = vault.parse_uri(res["uri"])
+    except vault.VaultError:
+        return False
+    final = vault.doc_path(env.vault_root, artifact_project, document_id)
+    staging = vault.staging_path(env.vault_root, artifact_project, res["event_id"])
+    return (vault.artifact_matches(final, desired_sha)
+            or vault.artifact_matches(staging, desired_sha))
+
+
 def memory_commit(env, ctx, args: dict) -> dict:
     _strict_schema(
         args,
@@ -225,8 +265,14 @@ def memory_commit(env, ctx, args: dict) -> dict:
     try:
         res = sm.lookup_reservation(conn, ctx.client_id, args["idempotency_key"])
         if res is not None:
+            legacy_equivalent = False
+            if (res["canonical_version"] == C.CANONICAL_VERSION
+                    and res["payload_hmac"] not in compatible_phmacs):
+                legacy_equivalent = _legacy_payload_matches_durable_document(
+                    env, ctx, res, args, detail, event_at, project)
             if (res["canonical_version"] != C.CANONICAL_VERSION
-                    or res["payload_hmac"] not in compatible_phmacs):
+                    or (res["payload_hmac"] not in compatible_phmacs
+                        and not legacy_equivalent)):
                 conn.execute("COMMIT")
                 audit.finalize(conn, ctx.request_id, "rejected", "idempotency_conflict")
                 ctx.audit_done = True
@@ -274,15 +320,7 @@ def memory_commit(env, ctx, args: dict) -> dict:
 
 def _commit_files(env, ctx, res, args: dict, detail: str | None, event_at: str, project: str) -> dict:
     conn = ctx.conn
-    md = render(
-        {"id": res["document_id"], "title": args["title"], "summary": args["summary"],
-         "uri": res["uri"], "project": project, "source_agent": ctx.source_tag,
-         "scope": "shared", "trust": "agent", "sensitivity": "internal", "type": args["type"],
-         "created_at": res["document_created_at"], "updated_at": res["document_created_at"],
-         "event_at": event_at,
-         "tags": [f"src:{ctx.source_tag}", f"project:{project}", "scope:shared",
-                  "trust:agent", "sensitivity:internal", f"type:{args['type']}"]},
-        args["retrieval_text"], detail)
+    md = _render_commit_document(ctx, res, args, detail, event_at, project)
     if len(md) > C.MAX_MD_BYTES:
         sm.set_reservation_state(conn, res["event_id"], "rejected", release_lease=True)
         audit.finalize(conn, ctx.request_id, "rejected", "limit_exceeded")
@@ -353,16 +391,16 @@ def _commit_files(env, ctx, res, args: dict, detail: str | None, event_at: str, 
         failpoints.hit("commit.rename.before")
         final_present = vault.artifact_exists(final)
         staging_present = vault.artifact_exists(staging)
-        if final_present:
-            if not vault.artifact_matches(final, desired_sha):
-                sm.mark_conflict(conn, res["event_id"], C.E_HASH_MISMATCH)
-                _finalize_quiet(conn, ctx, "error", C.E_HASH_MISMATCH)
-                raise ToolError(C.E_HASH_MISMATCH, state="error")
-        elif staging_present:
-            if not vault.artifact_matches(staging, desired_sha):
-                sm.mark_conflict(conn, res["event_id"], C.E_HASH_MISMATCH)
-                _finalize_quiet(conn, ctx, "error", C.E_HASH_MISMATCH)
-                raise ToolError(C.E_HASH_MISMATCH, state="error")
+        final_ok = final_present and vault.artifact_matches(final, desired_sha)
+        staging_ok = staging_present and vault.artifact_matches(staging, desired_sha)
+        if ((final_present and not final_ok)
+                or (staging_present and not staging_ok)):
+            sm.mark_conflict(conn, res["event_id"], C.E_HASH_MISMATCH)
+            _finalize_quiet(conn, ctx, "error", C.E_HASH_MISMATCH)
+            raise ToolError(C.E_HASH_MISMATCH, state="error")
+        if final_ok:
+            pass
+        elif staging_ok:
             vault.promote_staging(staging, final)
         else:
             sm.mark_durability_gap(conn, res["event_id"])

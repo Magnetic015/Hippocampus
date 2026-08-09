@@ -54,7 +54,7 @@ def test_same_key_same_payload_replays_same_event(lab, key):
 
 def test_semantically_equal_event_times_replay_and_migrate_legacy_hash(lab, key):
     utc_key = key()
-    utc_z = commit_args(utc_key, event_at="2026-08-01T01:30:00Z")
+    utc_z = commit_args(utc_key, event_at="2026-08-01T01:30:00.000Z")
     _, first, is_error = lab.call("memory_commit", utc_z)
     assert not is_error
 

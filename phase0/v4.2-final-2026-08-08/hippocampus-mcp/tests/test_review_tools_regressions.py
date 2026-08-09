@@ -308,6 +308,45 @@ def test_commit_never_marks_missing_or_unsafe_staging_stored(
     assert not vault.doc_path(lab.vault, project, document_id).exists()
 
 
+def test_valid_final_does_not_mask_unsafe_staging(lab_noworker, key, monkeypatch):
+    lab = lab_noworker
+    original_hit = failpoints.hit
+
+    def restore_final_and_tamper_staging(name):
+        if name != "commit.rename.before":
+            return original_hit(name)
+        staging = next(Path(lab.vault).rglob(".hippocampus-*.staging"))
+        desired = staging.read_bytes()
+        conn = lab.db()
+        try:
+            uri = conn.execute("SELECT uri FROM idempotency_reservation").fetchone()["uri"]
+        finally:
+            conn.close()
+        project, document_id = vault.parse_uri(uri)
+        final = vault.doc_path(lab.vault, project, document_id)
+        final.write_bytes(desired)
+        final.chmod(0o600)
+        staging.unlink()
+        staging.symlink_to(Path(lab.tmp) / "missing-staging-target")
+
+    monkeypatch.setattr(failpoints, "hit", restore_final_and_tamper_staging)
+    _, error, is_error = lab.call("memory_commit", commit_args(key()))
+    assert is_error and error["code"] == C.E_HASH_MISMATCH
+    conn = lab.db()
+    try:
+        row = dict(conn.execute(
+            "SELECT r.state AS reservation_state, o.status, o.error_code"
+            " FROM idempotency_reservation r JOIN outbox o USING(event_id)"
+        ).fetchone())
+    finally:
+        conn.close()
+    assert row == {
+        "reservation_state": "conflict",
+        "status": "conflict",
+        "error_code": C.E_HASH_MISMATCH,
+    }
+
+
 def test_search_requires_authoritative_local_provenance_and_indexed_state(
         lab_noworker, key):
     lab = lab_noworker
