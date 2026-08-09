@@ -572,16 +572,7 @@ def _read_outbox_matches(env, res, out, document_id: str, uri: str) -> bool:
 
 
 def _mark_read_hash_conflict(conn, event_id: str) -> None:
-    sm.begin_immediate(conn)
-    try:
-        sm.set_outbox_status(conn, event_id, "conflict", error_code=C.E_HASH_MISMATCH,
-                             release_lease=True)
-        sm.set_reservation_state(conn, event_id, "conflict", release_lease=True)
-        conn.execute("COMMIT")
-    except BaseException:
-        if conn.in_transaction:
-            conn.execute("ROLLBACK")
-        raise
+    sm.mark_conflict(conn, event_id, C.E_HASH_MISMATCH)
 
 
 def memory_read(env, ctx, args: dict) -> dict:

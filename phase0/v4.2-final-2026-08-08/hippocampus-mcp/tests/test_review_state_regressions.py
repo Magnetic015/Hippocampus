@@ -9,6 +9,7 @@ from harness import commit_args
 
 from hippocampus import constants as C, failpoints, statemachine as sm, vault
 from hippocampus.recovery import run_startup_recovery
+from hippocampus.worker import Worker
 
 
 @pytest.fixture(autouse=True)
@@ -59,6 +60,36 @@ def test_expired_indexing_lease_is_atomically_reclaimed(lab_noworker, key):
     assert reclaimed["status"] == "indexing"
     assert reclaimed["lease_owner"] == "owner-b"
     assert reclaimed["attempt"] == 2
+
+
+def test_worker_hash_mismatch_marks_both_rows_conflicted(lab_noworker, key):
+    lab = lab_noworker
+    idempotency_key = key()
+    args = commit_args(idempotency_key)
+    _, committed, is_error = lab.call("memory_commit", args)
+    assert not is_error
+    project, document_id = vault.parse_uri(committed["uri"])
+    final = vault.doc_path(lab.vault, project, document_id)
+    final.write_bytes(b"tampered after commit")
+
+    assert Worker(lab.env).process_one()
+    conn = lab.db()
+    try:
+        row = conn.execute(
+            "SELECT r.state AS reservation_state, o.status AS outbox_status, o.error_code"
+            " FROM idempotency_reservation r JOIN outbox o USING(event_id)"
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert dict(row) == {
+        "reservation_state": "conflict",
+        "outbox_status": "conflict",
+        "error_code": C.E_HASH_MISMATCH,
+    }
+    _, replay, replay_error = lab.call("memory_commit", args)
+    assert not replay_error
+    assert replay["stored"] is False and replay["index_state"] == "conflict"
 
 
 def test_write_staging_retries_short_writes(tmp_path, monkeypatch):

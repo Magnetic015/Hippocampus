@@ -112,20 +112,21 @@ def claim_next_event(conn, owner: str):
         raise
 
 
-def mark_durability_gap(conn, event_id: str) -> None:
-    """prepared with both staging and final file missing: both rows -> conflict (F8)."""
+def mark_conflict(conn, event_id: str, error_code: str) -> None:
+    """Atomically mark both halves of an event conflicted and release leases."""
     begin_immediate(conn)
     try:
-        conn.execute(
-            "UPDATE outbox SET status='conflict', error_code=?, updated_at=? WHERE event_id=?",
-            (E_DURABILITY_GAP, now(), event_id))
-        conn.execute(
-            "UPDATE idempotency_reservation SET state='conflict', updated_at=? WHERE event_id=?",
-            (now(), event_id))
+        set_outbox_status(conn, event_id, "conflict", error_code=error_code, release_lease=True)
+        set_reservation_state(conn, event_id, "conflict", release_lease=True)
         conn.execute("COMMIT")
     except BaseException:
         conn.execute("ROLLBACK")
         raise
+
+
+def mark_durability_gap(conn, event_id: str) -> None:
+    """prepared with both staging and final file missing: both rows -> conflict (F8)."""
+    mark_conflict(conn, event_id, E_DURABILITY_GAP)
 
 
 def status_by_ref(conn, *, document_id: str | None = None, client_id: str | None = None,

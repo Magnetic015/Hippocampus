@@ -57,8 +57,7 @@ class Worker:
                     return True
                 data = path.read_bytes()
                 if vault.sha256_bytes(data) != claimed["desired_sha256"]:
-                    sm.set_outbox_status(conn, event_id, "conflict",
-                                         error_code=C.E_HASH_MISMATCH, release_lease=True)
+                    sm.mark_conflict(conn, event_id, C.E_HASH_MISMATCH)
                     return True
                 if env.scanner_down:
                     sm.set_outbox_status(conn, event_id, "ready", release_lease=True)

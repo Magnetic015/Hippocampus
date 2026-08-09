@@ -158,8 +158,14 @@ def test_client_installers_align_fresh_grants_with_mode_and_expire_new_clients()
                      if "registry_cli" in line and " issue " in line)
         rotate = next(line for line in script.splitlines()
                       if "registry_cli" in line and " rotate " in line)
+        grant = next(line for line in script.splitlines()
+                     if "registry_cli" in line and " grant " in line)
+        bind = next(line for line in script.splitlines()
+                    if "registry_cli" in line and " bind-peer " in line)
         assert '--expires-days "$EXPIRES_DAYS"' in issue
         assert '--renew-expires-days "$EXPIRES_DAYS"' in rotate
+        assert '--readable "$PROJ" --writable "$PROJ"' in grant
+        assert "|| true" not in bind
 
 
 @pytest.mark.parametrize("mode,expected_project", [
@@ -220,6 +226,48 @@ def test_shell_installer_rejects_project_incompatible_with_commissioning(tmp_pat
 
     assert result.returncode == 2
     assert "commissioning mode requires project=commissioning" in result.stderr
+
+
+def test_shell_installer_rotation_refreshes_grants_and_requires_peer_binding(tmp_path):
+    script = (ROOT.parents[1] / "deploy-hippocampus-client.sh").read_text(encoding="utf-8")
+    remote = script.split("<<'REMOTE'\n", 1)[1].split("\nREMOTE", 1)[0]
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_docker = fake_bin / "docker"
+    fake_docker.write_text(
+        "#!/usr/bin/env bash\n"
+        "if [[ \" $* \" == *\" sh -c \"* ]]; then printf production; exit 0; fi\n"
+        "printf '%s\\n' \"$*\" >>\"$FAKE_LOG\"\n"
+        "if [[ \" $* \" == *\" rotate \"* ]]; then cat >/dev/null; exit 0; fi\n"
+        "if [[ \" $* \" == *\" grant \"* ]]; then exit 0; fi\n"
+        "if [[ \" $* \" == *\" bind-peer \"* ]]; then exit \"${FAKE_BIND_RC:-0}\"; fi\n"
+        "if [[ \" $* \" == *\" issue \"* ]]; then exit 99; fi\n"
+        "exit 2\n",
+        encoding="utf-8",
+    )
+    fake_docker.chmod(0o755)
+    log = tmp_path / "docker.log"
+    base_env = dict(os.environ, PATH=f"{fake_bin}:{os.environ['PATH']}", FAKE_LOG=str(log))
+
+    success = subprocess.run(
+        ["bash", "-s", "--", "existing-client", "mcp", "db", "192.0.2.4", "auto", "14"],
+        input=remote, text=True, capture_output=True, env=base_env, check=False,
+    )
+    calls = log.read_text(encoding="utf-8")
+    assert success.returncode == 0, success.stderr
+    assert "rotate existing-client --renew-expires-days 14" in calls
+    assert "grant existing-client --readable soul --writable soul" in calls
+    assert "bind-peer existing-client 192.0.2.4" in calls
+    assert " issue " not in f" {calls} "
+
+    log.write_text("", encoding="utf-8")
+    failed_bind = subprocess.run(
+        ["bash", "-s", "--", "existing-client", "mcp", "db", "192.0.2.4", "auto", "14"],
+        input=remote, text=True, capture_output=True,
+        env=dict(base_env, FAKE_BIND_RC="7"), check=False,
+    )
+    assert failed_bind.returncode == 7
+    assert failed_bind.stdout == ""  # the fresh token is not returned or installed
 
 
 def test_windows_installer_uses_process_scoped_launcher_not_plaintext_user_env():
@@ -416,3 +464,53 @@ def test_request_body_reader_enforces_absolute_deadline_against_slow_drip(monkey
 
     assert handler.rfile.reads == 2
     assert handler.connection.timeout == 17.0
+
+
+def test_header_reader_enforces_absolute_deadline_against_slow_drip(monkeypatch):
+    class FakeConnection:
+        def __init__(self):
+            self.timeout = 17.0
+            self.changes = []
+
+        def gettimeout(self):
+            return self.timeout
+
+        def settimeout(self, value):
+            self.timeout = value
+            self.changes.append(value)
+
+    class DripReader:
+        def __init__(self):
+            self.reads = 0
+
+        def read1(self, _length):
+            self.reads += 1
+            return b"x"
+
+    clock = iter((100.0, 100.4, 100.8, 101.01))
+    monkeypatch.setattr(server.time, "monotonic", lambda: next(clock))
+    connection = FakeConnection()
+    base = DripReader()
+    reader = server._HeaderDeadlineReader(base, connection)
+    reader.start_deadline(1.0)
+
+    with pytest.raises(TimeoutError, match="header deadline"):
+        reader.readline(10)
+    reader.clear_deadline()
+
+    assert base.reads == 2
+    assert connection.timeout == 17.0
+    assert connection.changes[-1] == 17.0
+
+
+def test_partial_http_headers_are_closed_before_dispatch(lab_noworker, monkeypatch):
+    monkeypatch.setattr(C, "REQUEST_HEADER_TIMEOUT_S", 0.1)
+    sock = socket.create_connection(("127.0.0.1", lab_noworker.handle.port), timeout=2)
+    try:
+        sock.sendall(b"POST /mcp/ HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Drip: ")
+        sock.settimeout(2)
+        assert sock.recv(1) == b""
+    finally:
+        sock.close()
+
+    assert lab_noworker.audit_rows() == []

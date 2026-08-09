@@ -19,7 +19,7 @@
 #   ./deploy-hippocampus-client.sh --source provision  # 强制在 Pi5 轮换新 token
 #   ./deploy-hippocampus-client.sh --source copy:/home/kkp/.config/hippocampus/mac-claude.token
 #   变量可覆盖：PI5_SSH / MCP_URL / CLIENT_ID / TOKEN_FILE / MCP_CONTAINER / STATE_DB /
-#               PROJECT(auto|显式 project) / ISSUE_EXPIRES_DAYS(仅首次 issue) ...
+#               PROJECT(auto|显式 project) / ISSUE_EXPIRES_DAYS ...
 #
 # 规范托管位置：/home/kkp/hippocampus/deploy-hippocampus-client.sh（Pi5 192.168.2.41）。
 # 任意 Mac 一键部署 = 从 .2.41 拉取即用（需已有到 kkp@192.168.2.41 的 SSH 访问）：
@@ -40,7 +40,7 @@ MCP_CONTAINER="${MCP_CONTAINER:-hippocampus-hippocampus-mcp-1}"
 STATE_DB="${STATE_DB:-/data/state/outbox.db}"
 TOKEN_SOURCE="${TOKEN_SOURCE:-auto}"     # auto | provision | copy:<pi5-path>
 PROJECT="${PROJECT:-auto}"               # auto: commissioning→commissioning, production→soul
-ISSUE_EXPIRES_DAYS="${ISSUE_EXPIRES_DAYS:-14}" # 仅首次自动 issue；rotate 保留既有期限
+ISSUE_EXPIRES_DAYS="${ISSUE_EXPIRES_DAYS:-14}" # 首次 issue / 有限期 rotate 续期；永久期不变
 # -----------------------------------------------------------
 
 while [ $# -gt 0 ]; do
@@ -127,8 +127,10 @@ tok="$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')"
 # 已注册则轮换；未注册则 issue 自动注册（部署即自动注册 client_id）
 if ! printf '%s' "$tok" | docker exec -i "$CTN" python -m hippocampus.registry_cli --db "$DB" rotate "$CID" --renew-expires-days "$EXPIRES_DAYS" >/dev/null 2>&1; then
   printf '%s' "$tok" | docker exec -i "$CTN" python -m hippocampus.registry_cli --db "$DB" issue "$CID" --source-tag "$CID" --readable "$PROJ" --writable "$PROJ" --expires-days "$EXPIRES_DAYS" >/dev/null
+else
+  docker exec "$CTN" python -m hippocampus.registry_cli --db "$DB" grant "$CID" --readable "$PROJ" --writable "$PROJ" >/dev/null
 fi
-docker exec "$CTN" python -m hippocampus.registry_cli --db "$DB" bind-peer "$CID" "$PEER" >/dev/null 2>&1 || true
+docker exec "$CTN" python -m hippocampus.registry_cli --db "$DB" bind-peer "$CID" "$PEER" >/dev/null
 printf '%s' "$tok"
 REMOTE
   then rm -f "$tmp"; die "Pi5 端注册/轮换失败（检查 SSH / docker / registry）"; fi

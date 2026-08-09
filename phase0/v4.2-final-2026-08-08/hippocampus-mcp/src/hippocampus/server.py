@@ -21,6 +21,84 @@ except ImportError:  # pragma: no cover
     pass
 
 
+class _HeaderDeadlineReader:
+    """Buffered request reader with one absolute deadline for all headers.
+
+    ``socket.settimeout`` alone is only an idle timeout: a peer can keep a
+    request thread alive by sending one byte before every timeout.  This reader
+    keeps bytes read past a newline for the normal body reader while recomputing
+    the remaining wall-clock budget before each underlying read.
+    """
+
+    def __init__(self, base, connection):
+        self._base = base
+        self._connection = connection
+        self._buffer = bytearray()
+        self._deadline: float | None = None
+        self._previous_timeout = None
+
+    def start_deadline(self, timeout_s: float) -> None:
+        self.clear_deadline()
+        self._previous_timeout = self._connection.gettimeout()
+        self._deadline = time.monotonic() + timeout_s
+
+    def clear_deadline(self) -> None:
+        if self._deadline is None:
+            return
+        previous_timeout = self._previous_timeout
+        self._deadline = None
+        self._previous_timeout = None
+        try:
+            self._connection.settimeout(previous_timeout)
+        except OSError:
+            pass
+
+    def _read_base1(self, size: int) -> bytes:
+        if self._deadline is not None:
+            remaining = self._deadline - time.monotonic()
+            if remaining <= 0:
+                raise socket.timeout("request header deadline exceeded")
+            self._connection.settimeout(remaining)
+        return self._base.read1(size)
+
+    def read1(self, size: int = -1) -> bytes:
+        if size == 0:
+            return b""
+        if self._buffer:
+            count = len(self._buffer) if size is None or size < 0 else min(size, len(self._buffer))
+            chunk = bytes(self._buffer[:count])
+            del self._buffer[:count]
+            return chunk
+        return self._read_base1(size)
+
+    def readline(self, size: int = -1) -> bytes:
+        if size == 0:
+            return b""
+        limit = None if size is None or size < 0 else size
+        while True:
+            available = len(self._buffer) if limit is None else min(len(self._buffer), limit)
+            newline = self._buffer.find(b"\n", 0, available)
+            if newline >= 0:
+                end = newline + 1
+                line = bytes(self._buffer[:end])
+                del self._buffer[:end]
+                return line
+            if limit is not None and len(self._buffer) >= limit:
+                line = bytes(self._buffer[:limit])
+                del self._buffer[:limit]
+                return line
+            read_size = 8192 if limit is None else min(8192, limit - len(self._buffer))
+            chunk = self._read_base1(read_size)
+            if not chunk:
+                line = bytes(self._buffer)
+                self._buffer.clear()
+                return line
+            self._buffer.extend(chunk)
+
+    def __getattr__(self, name):
+        return getattr(self._base, name)
+
+
 class Env:
     def __init__(self, *, db_path: str, vault_root: str, mode: str, bind: tuple[str, int],
                  hindsight_base: str, hindsight_token: str, token_pepper: bytes,
@@ -220,6 +298,25 @@ def make_handler(env: Env):
 
         def log_message(self, *args):  # access log must not record header/query/body
             pass
+
+        def setup(self):
+            super().setup()
+            self.rfile = _HeaderDeadlineReader(self.rfile, self.connection)
+
+        def handle_one_request(self):
+            self.rfile.start_deadline(C.REQUEST_HEADER_TIMEOUT_S)
+            try:
+                return super().handle_one_request()
+            finally:
+                self.rfile.clear_deadline()
+
+        def parse_request(self):
+            try:
+                return super().parse_request()
+            finally:
+                # The request line and every header share one deadline.  Clear it
+                # before dispatch so the body receives its own absolute budget.
+                self.rfile.clear_deadline()
 
         # ---------------------------------------------------------- responses
         def _send(self, status: int, payload: dict | None, extra_headers: dict | None = None):
