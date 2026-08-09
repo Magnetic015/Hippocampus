@@ -19,6 +19,11 @@
 #   ./deploy-hippocampus-client.sh --source provision  # 强制在 Pi5 轮换新 token
 #   ./deploy-hippocampus-client.sh --source copy:/home/kkp/.config/hippocampus/mac-claude.token
 #   变量可覆盖：PI5_SSH / MCP_URL / CLIENT_ID / TOKEN_FILE / MCP_CONTAINER / STATE_DB ...
+#
+# 规范托管位置：/home/kkp/hippocampus/deploy-hippocampus-client.sh（Pi5 192.168.2.41）。
+# 任意 Mac 一键部署 = 从 .2.41 拉取即用（需已有到 kkp@192.168.2.41 的 SSH 访问）：
+#   ssh kkp@192.168.2.41 'cat /home/kkp/hippocampus/deploy-hippocampus-client.sh' | bash
+#   # 传参：… | bash -s -- --source provision   （--source copy:PATH / --client ID 同理）
 set -euo pipefail
 
 # ---------------- 配置（按需覆盖为环境变量） ----------------
