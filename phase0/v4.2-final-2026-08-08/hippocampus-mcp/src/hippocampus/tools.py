@@ -227,9 +227,18 @@ def memory_commit(env, ctx, args: dict) -> dict:
     if event_at == "unset":
         legacy_event_values.update((None, "unset"))
     elif event_at.endswith("+00:00"):
+        utc_suffixes = ("Z", "+00:00", "+0000", "+00")
+        raw_event_at = args.get("event_at")
+        if raw_event_at is not None:
+            for suffix in utc_suffixes:
+                if raw_event_at.endswith(suffix):
+                    raw_utc_prefix = raw_event_at[:-len(suffix)]
+                    legacy_event_values.update(
+                        raw_utc_prefix + candidate for candidate in utc_suffixes)
+                    break
         utc_second = event_at[:-6]
         legacy_event_values.update(
-            utc_second + suffix for suffix in ("Z", "+00:00", "+0000", "+00"))
+            utc_second + suffix for suffix in utc_suffixes)
         # JavaScript, database and protobuf clients commonly emitted fixed
         # millisecond/microsecond/nanosecond zero fractions before event_at was
         # normalized ahead of HMAC calculation.  Only zero fractions are
@@ -238,7 +247,7 @@ def memory_commit(env, ctx, args: dict) -> dict:
         for digits in range(1, 10):
             fractional = utc_second + "." + ("0" * digits)
             legacy_event_values.update(
-                fractional + suffix for suffix in ("Z", "+00:00", "+0000", "+00"))
+                fractional + suffix for suffix in utc_suffixes)
     for legacy_event_at in legacy_event_values:
         legacy_fields = dict(cfields, event_at=legacy_event_at)
         compatible_phmacs.add(canonical.payload_hmac(env.idem_key, legacy_fields))

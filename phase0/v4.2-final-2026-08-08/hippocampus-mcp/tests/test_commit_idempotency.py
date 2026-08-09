@@ -122,6 +122,26 @@ def test_semantically_equal_event_times_replay_and_migrate_legacy_hash(lab, key)
     assert migrated_hmac != legacy_absent_hmac
 
 
+def test_nonzero_fraction_legacy_utc_suffix_migrates(lab, key):
+    k = key()
+    old_raw = commit_args(k, event_at="2026-08-01T01:30:00.123Z")
+    _, first, is_error = lab.call("memory_commit", old_raw)
+    assert not is_error
+    legacy_hmac = canonical.payload_hmac(lab.env.idem_key, old_raw)
+    conn = lab.db()
+    try:
+        conn.execute(
+            "UPDATE idempotency_reservation SET payload_hmac=? WHERE idempotency_key=?",
+            (legacy_hmac, k),
+        )
+    finally:
+        conn.close()
+
+    _, replay, is_error = lab.call(
+        "memory_commit", commit_args(k, event_at="2026-08-01T01:30:00.123+00:00"))
+    assert not is_error and replay["document_id"] == first["document_id"]
+
+
 def test_same_key_different_payload_is_conflict(lab, key):
     k = key()
     lab.call("memory_commit", commit_args(k))
