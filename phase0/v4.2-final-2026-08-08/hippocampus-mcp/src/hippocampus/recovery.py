@@ -24,13 +24,18 @@ def run_startup_recovery(env) -> dict:
                 "SELECT * FROM idempotency_reservation WHERE state='prepared'").fetchall():
             if env.scanner_down:
                 break  # scanner unavailable: recovery pauses, queue untouched
-            project, doc_id = vault.parse_uri(res["uri"])
             out = conn.execute("SELECT * FROM outbox WHERE event_id=?",
                                (res["event_id"],)).fetchone()
             if out is None or out["status"] != "prepared":
                 continue
-            staging = vault.staging_path(env.vault_root, project, res["event_id"])
-            final = vault.doc_path(env.vault_root, project, doc_id)
+            try:
+                project, doc_id = vault.parse_uri(res["uri"])
+                staging = vault.staging_path(env.vault_root, project, res["event_id"])
+                final = vault.doc_path(env.vault_root, project, doc_id)
+            except vault.VaultError:
+                sm.mark_conflict(conn, res["event_id"], C.E_HASH_MISMATCH)
+                stats["hash_mismatch"] += 1
+                continue
             final_exists = _artifact_exists(final)
             staging_exists = _artifact_exists(staging)
             final_ok = final_exists and vault.artifact_matches(final, out["desired_sha256"])

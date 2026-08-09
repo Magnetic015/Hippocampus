@@ -48,14 +48,17 @@ class Worker:
             event_id = claimed["event_id"]
             attempt = claimed["attempt"]
             try:
-                project, doc_id = vault.parse_uri(claimed["uri"])
-                path = vault.doc_path(env.vault_root, project, doc_id)
-                vault.refuse_symlink(path)
-                if not path.exists():
-                    sm.mark_durability_gap(conn, event_id)
-                    env.health["durability_gap"] = True
+                try:
+                    project, doc_id = vault.parse_uri(claimed["uri"])
+                    path = vault.doc_path(env.vault_root, project, doc_id)
+                    data = vault.read_artifact(path, max_bytes=C.MAX_MD_BYTES)
+                except vault.VaultError as exc:
+                    if exc.code == "ARTIFACT_MISSING":
+                        sm.mark_durability_gap(conn, event_id)
+                        env.health["durability_gap"] = True
+                    else:
+                        sm.mark_conflict(conn, event_id, C.E_HASH_MISMATCH)
                     return True
-                data = path.read_bytes()
                 if vault.sha256_bytes(data) != claimed["desired_sha256"]:
                     sm.mark_conflict(conn, event_id, C.E_HASH_MISMATCH)
                     return True

@@ -95,11 +95,70 @@ def sha256_file(path: Path) -> str:
     return sha256_bytes(path.read_bytes())
 
 
+def read_artifact(path: Path, *, max_bytes: int) -> bytes:
+    """Read one strict 0600 regular artifact without following symlinks."""
+    try:
+        refuse_symlink(path)
+        before = path.lstat()
+    except FileNotFoundError:
+        raise VaultError("ARTIFACT_MISSING") from None
+    except VaultError:
+        raise
+    except OSError:
+        raise VaultError("ARTIFACT_UNSAFE") from None
+    if not stat.S_ISREG(before.st_mode) or stat.S_IMODE(before.st_mode) != 0o600:
+        raise VaultError("ARTIFACT_UNSAFE")
+
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    elif path.is_symlink():
+        raise VaultError("ARTIFACT_UNSAFE")
+    try:
+        fd = os.open(str(path), flags)
+    except FileNotFoundError:
+        raise VaultError("ARTIFACT_MISSING") from None
+    except OSError:
+        raise VaultError("ARTIFACT_UNSAFE") from None
+    try:
+        opened = os.fstat(fd)
+        if ((opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
+                or not stat.S_ISREG(opened.st_mode)
+                or stat.S_IMODE(opened.st_mode) != 0o600
+                or opened.st_size > max_bytes):
+            raise VaultError("ARTIFACT_UNSAFE")
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = os.read(fd, min(128 * 1024, max_bytes - total + 1))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > max_bytes:
+                raise VaultError("ARTIFACT_UNSAFE")
+        after = path.lstat()
+        if ((after.st_dev, after.st_ino) != (opened.st_dev, opened.st_ino)
+                or not stat.S_ISREG(after.st_mode)
+                or stat.S_IMODE(after.st_mode) != 0o600):
+            raise VaultError("ARTIFACT_UNSAFE")
+        return b"".join(chunks)
+    except VaultError:
+        raise
+    except FileNotFoundError:
+        raise VaultError("ARTIFACT_MISSING") from None
+    except OSError:
+        raise VaultError("ARTIFACT_UNSAFE") from None
+    finally:
+        os.close(fd)
+
+
 def artifact_matches(path: Path, expected_sha256: str) -> bool:
     """Match a recovery artifact without following symlinks or opening special files."""
     try:
+        refuse_symlink(path)
         before = path.lstat()
-    except OSError:
+    except (OSError, VaultError):
         return False
     if not stat.S_ISREG(before.st_mode) or stat.S_IMODE(before.st_mode) != 0o600:
         return False

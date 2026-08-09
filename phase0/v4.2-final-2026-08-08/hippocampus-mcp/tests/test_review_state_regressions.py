@@ -100,6 +100,47 @@ def test_worker_hash_mismatch_marks_both_rows_conflicted(lab_noworker, key):
     assert replay["stored"] is False and replay["index_state"] == "conflict"
 
 
+@pytest.mark.parametrize("unsafe_kind", ["symlink", "directory", "mode"])
+def test_worker_unsafe_artifact_converges_both_rows(lab_noworker, key, unsafe_kind):
+    lab = lab_noworker
+    _, committed, is_error = lab.call("memory_commit", commit_args(key()))
+    assert not is_error
+    project, document_id = vault.parse_uri(committed["uri"])
+    final = vault.doc_path(lab.vault, project, document_id)
+
+    if unsafe_kind == "symlink":
+        target = Path(lab.tmp) / "worker-symlink-target"
+        target.write_bytes(final.read_bytes())
+        target.chmod(0o600)
+        final.unlink()
+        final.symlink_to(target)
+    elif unsafe_kind == "directory":
+        final.unlink()
+        final.mkdir()
+    else:
+        final.chmod(0o644)
+
+    assert Worker(lab.env).process_one()
+    conn = lab.db()
+    try:
+        row = conn.execute(
+            "SELECT r.state AS reservation_state, r.lease_owner AS reservation_lease,"
+            " o.status AS outbox_status, o.error_code, o.lease_owner AS outbox_lease"
+            " FROM idempotency_reservation r JOIN outbox o USING(event_id)"
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert dict(row) == {
+        "reservation_state": "conflict",
+        "reservation_lease": None,
+        "outbox_status": "conflict",
+        "error_code": C.E_HASH_MISMATCH,
+        "outbox_lease": None,
+    }
+    assert lab.mock.retain_log == []
+
+
 def test_write_staging_retries_short_writes(tmp_path, monkeypatch):
     staging = tmp_path / "short-write.staging"
     payload = b"0123456789abcdef"
@@ -141,6 +182,22 @@ def test_recovery_rejects_tampered_final_even_with_valid_staging(lab_noworker, k
     assert _reservation_state(lab) == "conflict"
     assert final.read_bytes() == altered
     assert staging.exists()
+
+
+def test_recovery_converges_symlinked_final_path(lab_noworker, key):
+    lab = lab_noworker
+    staging, final, _ = _prepared_paths(lab, key())
+    target = Path(lab.tmp) / "recovery-symlink-target"
+    target.write_bytes(staging.read_bytes())
+    target.chmod(0o600)
+    final.symlink_to(target)
+
+    stats = run_startup_recovery(lab.env)
+
+    assert stats["hash_mismatch"] == 1 and stats["promoted"] == 0
+    assert _outbox(lab)["status"] == "conflict"
+    assert _reservation_state(lab) == "conflict"
+    assert final.is_symlink()
 
 
 def test_recovery_rejects_tampered_staging_even_with_valid_final(lab_noworker, key):

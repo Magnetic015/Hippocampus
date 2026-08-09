@@ -601,13 +601,16 @@ def memory_read(env, ctx, args: dict) -> dict:
                 or out_row["status"] not in ("ready", "indexing", "retry_wait",
                                              "indexed", "dead")):
             raise ToolError(C.E_STATE_INVARIANT)
-        path = vault.doc_path(env.vault_root, project, doc_id)
-        vault.refuse_symlink(path)
-        if not path.exists():
-            raise ToolError(C.E_NOT_FOUND)
-        data = path.read_bytes()
-        if len(data) > C.MAX_READ_DOC_BYTES:
-            raise ToolError(C.E_LIMIT_EXCEEDED, fields=["uris"])
+        try:
+            path = vault.doc_path(env.vault_root, project, doc_id)
+            data = vault.read_artifact(path, max_bytes=C.MAX_READ_DOC_BYTES)
+        except vault.VaultError as exc:
+            if exc.code == "ARTIFACT_MISSING":
+                sm.mark_durability_gap(ctx.conn, out_row["event_id"])
+                env.health["durability_gap"] = True
+                raise ToolError(C.E_NOT_FOUND) from None
+            _mark_read_hash_conflict(ctx.conn, out_row["event_id"])
+            raise ToolError(C.E_STATE_INVARIANT, outcome=C.E_HASH_MISMATCH) from None
         if vault.sha256_bytes(data) != out_row["desired_sha256"]:
             _mark_read_hash_conflict(ctx.conn, out_row["event_id"])
             raise ToolError(C.E_STATE_INVARIANT, outcome=C.E_HASH_MISMATCH)

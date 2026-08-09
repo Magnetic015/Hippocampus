@@ -185,6 +185,35 @@ def test_read_rejects_clean_hash_mismatch_and_marks_conflict(lab_noworker, key):
     }
 
 
+def test_read_rejects_symlinked_artifact_and_marks_conflict(lab_noworker, key):
+    lab = lab_noworker
+    data = _commit(lab, key)
+    project, document_id = vault.parse_uri(data["uri"])
+    path = vault.doc_path(lab.vault, project, document_id)
+    target = Path(lab.tmp) / "read-symlink-target"
+    target.write_bytes(path.read_bytes())
+    target.chmod(0o600)
+    path.unlink()
+    path.symlink_to(target)
+
+    _, error, is_error = lab.call("memory_read", {"uris": [data["uri"]]})
+
+    assert is_error and error["code"] == C.E_STATE_INVARIANT
+    conn = lab.db()
+    try:
+        row = dict(conn.execute(
+            "SELECT r.state AS reservation_state, o.status, o.error_code"
+            " FROM idempotency_reservation r JOIN outbox o USING(event_id)"
+        ).fetchone())
+    finally:
+        conn.close()
+    assert row == {
+        "reservation_state": "conflict",
+        "status": "conflict",
+        "error_code": C.E_HASH_MISMATCH,
+    }
+
+
 def test_post_prepare_failure_preserves_recoverable_artifacts(lab_noworker, key):
     lab = lab_noworker
     idempotency_key = key()
