@@ -1,0 +1,30 @@
+# Phase 4 reverse proxy example. GENERATED BUT NEVER LOADED in Phase 0-2.
+# Dedicated subdomain, TLS, rate limiting, exact trusted proxy.
+
+memory.example.com {
+	tls {
+		# ACME or an internal CA; never reuse the .2.41 gateway's certs.
+	}
+
+	# Only the MCP data protocol is proxied. Health routes stay internal.
+	handle /mcp/* {
+		reverse_proxy hippocampus-mcp:8080 {
+			header_up X-Forwarded-For {remote_host}
+			# The server ignores X-Forwarded-For unless remote mode is on and
+			# this proxy's exact address is the configured trusted proxy.
+		}
+	}
+
+	# Never proxy: /healthz /readyz /version, Hindsight API, PostgreSQL, :9999
+	handle {
+		respond 404
+	}
+
+	rate_limit {
+		zone mcp {
+			key {remote_host}
+			events 60
+			window 1m
+		}
+	}
+}

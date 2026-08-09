@@ -1,0 +1,95 @@
+{
+  "note": "Assignment only. Records are imported in Phase 2 by each client from its own real runtime context; script or curl import does not satisfy 09 §10.6.",
+  "phase": "1-step-9",
+  "plan_version": "v4.2",
+  "subsets": {
+    "dockerNode-openclaw": {
+      "count": 10,
+      "seqs": [
+        3,
+        6,
+        9,
+        12,
+        15,
+        18,
+        21,
+        24,
+        27,
+        30
+      ],
+      "titles": [
+        "秘密红线零落盘",
+        "时间语义 unset",
+        "扫描器故障 fail-closed",
+        "检索归并规则",
+        "global 显式授权",
+        "只读 rootfs 与能力",
+        "读取上限",
+        "孤儿文件处置",
+        "Bank 配置锁定",
+        "Gateway 排除"
+      ]
+    },
+    "mac-claude": {
+      "count": 11,
+      "seqs": [
+        1,
+        4,
+        7,
+        10,
+        13,
+        16,
+        19,
+        22,
+        25,
+        28,
+        31
+      ],
+      "titles": [
+        "写入链路与原子落盘",
+        "并集 gate 与 client 绑定",
+        "端口与监听边界",
+        "DURABILITY_GAP 处置",
+        "token 计量口径",
+        "回滚清单机制",
+        "OTEL 与 trace 关闭",
+        "JSON-RPC 限型",
+        "降级不阻塞任务",
+        "失败退避",
+        "中文召回基线"
+      ]
+    },
+    "mac-codex": {
+      "count": 11,
+      "seqs": [
+        2,
+        5,
+        8,
+        11,
+        14,
+        17,
+        20,
+        23,
+        26,
+        29,
+        32
+      ],
+      "titles": [
+        "Outbox 异步索引边界",
+        "审计一请求一行",
+        "幂等冲突判定",
+        "lease 契约",
+        "commissioning 隔离",
+        "资源上限",
+        "Vault 唯一映射",
+        "恢复策略重扫",
+        "三端身份分离",
+        "审计导出",
+        "客户端备份边界"
+      ]
+    }
+  },
+  "target_bank": "commissioning-v4-2",
+  "target_project": "commissioning",
+  "total_records": 32
+}

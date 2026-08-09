@@ -1,0 +1,39 @@
+# --- Claude Code dev workspace (LOCAL ONLY - never push) ---
+CLAUDE.md
+.claude/
+docs/
+
+# --- IDE / OS noise ---
+.idea/
+.DS_Store
+
+# --- Secrets / credentials ---
+.env
+.env.*
+!*.env.example
+proxy/
+secrets/
+*.token
+
+# --- User data / sessions ---
+userdata/
+session/
+
+# --- Personal documents and exports ---
+__article
+*.docx
+*.doc
+*.xlsx
+*.csv
+
+# --- Python / test artifacts ---
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# --- Phase 0 runtime artifacts (never committed) ---
+phase0/*/hippocampus-mcp/vendor/tiktoken-cache/
+phase0/*/**/state/
+phase0/*/**/vault/
+backups-test/

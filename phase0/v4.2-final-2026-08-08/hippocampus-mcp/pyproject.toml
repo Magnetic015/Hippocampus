@@ -1,0 +1,24 @@
+[project]
+name = "hippocampus-mcp"
+version = "0.1.0"
+description = "Hippocampus MCP memory gateway (plan v4.2, Phase 0 workspace)"
+requires-python = ">=3.12"
+dependencies = [
+    "tiktoken>=0.7,<0.8",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3,<9",
+]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests", "../scanner"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hippocampus"]
