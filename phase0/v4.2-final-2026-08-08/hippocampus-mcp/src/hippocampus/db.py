@@ -89,9 +89,16 @@ CREATE TABLE IF NOT EXISTS audit (
   query_hmac TEXT,
   query_len INTEGER,
   latency_ms INTEGER,
-  scan_policy_version TEXT
+  scan_policy_version TEXT,
+  redacted_fields TEXT,
+  redacted_categories TEXT
 );
 """
+
+_MIGRATIONS = (
+    ("audit", "redacted_fields", "TEXT"),
+    ("audit", "redacted_categories", "TEXT"),
+)
 
 
 def now() -> int:
@@ -114,6 +121,13 @@ def init_db(path: str) -> None:
     conn = connect(path)
     try:
         conn.executescript(_DDL)
+        for table, column, definition in _MIGRATIONS:
+            columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+            if column not in columns:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+        audit_columns = {row["name"] for row in conn.execute("PRAGMA table_info(audit)")}
+        if "ts" in audit_columns:
+            conn.execute("CREATE INDEX IF NOT EXISTS audit_retention_ts ON audit(ts)")
     finally:
         conn.close()
     if not prior:

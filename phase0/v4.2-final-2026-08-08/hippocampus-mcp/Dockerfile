@@ -2,11 +2,17 @@
 # production stage removes the failpoint module entirely (09 §10.2).
 FROM python:3.12-slim AS base
 WORKDIR /app
-COPY pyproject.toml ./
-COPY src ./src
-COPY vendor ./vendor
-COPY scanner-pkg ./scanner
-RUN pip install --no-cache-dir "tiktoken>=0.7,<0.8" && pip install --no-cache-dir -e .
+# Build from the Phase workspace root (`-f hippocampus-mcp/Dockerfile`) so every
+# input exists in a clean checkout. The generated tiktoken cache stays in the
+# image layer rather than source control.
+COPY hippocampus-mcp/pyproject.toml ./
+COPY hippocampus-mcp/src ./src
+COPY scanner ./scanner
+RUN pip install --no-cache-dir "tiktoken>=0.7,<0.8" \
+    && pip install --no-cache-dir -e . \
+    && mkdir -p /app/vendor/tiktoken-cache \
+    && TIKTOKEN_CACHE_DIR=/app/vendor/tiktoken-cache \
+       python -c 'import tiktoken; tiktoken.get_encoding("cl100k_base")'
 ENV PYTHONPATH=/app/scanner \
     HIPPOCAMPUS_TIKTOKEN_CACHE=/app/vendor/tiktoken-cache
 

@@ -127,10 +127,37 @@ def test_rejections_have_exactly_one_redacted_row(lab, key):
 
 
 def test_secret_rejection_records_categories_and_paths_only(lab, key):
-    lab.call("memory_commit", commit_args(key(), detail_body="AKIACANARY0EXAMPLE99"))
+    _, data, is_error = lab.call(
+        "memory_commit", commit_args(key(), detail_body="AKIACANARY0EXAMPLE99"))
+    assert is_error
+    assert data["fields"] == ["detail_body"]
+    assert data["categories"] == ["credential"]
     row = lab.audit_rows()[0]
     assert row["state"] == "rejected" and row["outcome_code"] == C.OUTCOME_SECRET_REJECTED
+    assert json.loads(row["redacted_fields"]) == ["detail_body"]
+    assert json.loads(row["redacted_categories"]) == ["credential"]
     assert "AKIA" not in json.dumps(dict(row), ensure_ascii=False)
+
+
+def test_init_db_migrates_existing_audit_table(tmp_path):
+    from hippocampus.db import connect, init_db
+
+    db_path = tmp_path / "state" / "outbox.db"
+    db_path.parent.mkdir()
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("CREATE TABLE audit (request_id TEXT PRIMARY KEY)")
+        conn.commit()
+    finally:
+        conn.close()
+
+    init_db(str(db_path))
+    conn = connect(str(db_path))
+    try:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(audit)")}
+    finally:
+        conn.close()
+    assert {"redacted_fields", "redacted_categories"} <= columns
 
 
 def test_latency_recorded(lab):
@@ -142,7 +169,12 @@ def test_audit_retention_delete_does_not_cascade(lab, key):
     _, data, _ = lab.call("memory_commit", commit_args(key()))
     conn = lab.db()
     try:
-        conn.execute("DELETE FROM audit")  # simulate 90-day purge
+        current_ts = 2_000_000_000
+        conn.execute(
+            "UPDATE audit SET ts=?",
+            (current_ts - C.AUDIT_RETENTION_DAYS * 86400 - 1,),
+        )
+        assert audit.enforce_retention(conn, current_ts=current_ts) == 1
         res = conn.execute("SELECT root_request_id, event_id FROM idempotency_reservation").fetchone()
         out = conn.execute("SELECT event_id, root_request_id FROM outbox").fetchone()
     finally:

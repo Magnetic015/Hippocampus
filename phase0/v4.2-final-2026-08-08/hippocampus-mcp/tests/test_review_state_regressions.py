@@ -1,0 +1,151 @@
+"""Regression coverage for verified PR review findings in state and Vault recovery."""
+
+import os
+import stat
+from pathlib import Path
+
+import pytest
+from harness import commit_args
+
+from hippocampus import constants as C, failpoints, statemachine as sm, vault
+from hippocampus.recovery import run_startup_recovery
+
+
+@pytest.fixture(autouse=True)
+def _clear_failpoints():
+    failpoints.clear()
+    yield
+    failpoints.clear()
+
+
+def _prepared_paths(lab, key: str):
+    failpoints.arm("commit.rename.before")
+    _, data, is_error = lab.call("memory_commit", commit_args(key))
+    assert not is_error and data["index_state"] == "recovery_pending"
+    conn = lab.db()
+    try:
+        res = conn.execute("SELECT * FROM idempotency_reservation").fetchone()
+        out = conn.execute("SELECT * FROM outbox").fetchone()
+        project, document_id = vault.parse_uri(res["uri"])
+        staging = vault.staging_path(lab.vault, project, res["event_id"])
+        final = vault.doc_path(lab.vault, project, document_id)
+        return staging, final, out["desired_sha256"]
+    finally:
+        conn.close()
+
+
+def _outbox(lab):
+    conn = lab.db()
+    try:
+        return dict(conn.execute("SELECT * FROM outbox").fetchone())
+    finally:
+        conn.close()
+
+
+def test_expired_indexing_lease_is_atomically_reclaimed(lab_noworker, key):
+    lab = lab_noworker
+    lab.call("memory_commit", commit_args(key()))
+    conn = lab.db()
+    try:
+        first = sm.claim_next_event(conn, "owner-a")
+        assert first is not None and first["status"] == "indexing" and first["attempt"] == 1
+        conn.execute("UPDATE outbox SET lease_expires_at=1 WHERE event_id=?",
+                     (first["event_id"],))
+        reclaimed = sm.claim_next_event(conn, "owner-b")
+    finally:
+        conn.close()
+
+    assert reclaimed is not None
+    assert reclaimed["status"] == "indexing"
+    assert reclaimed["lease_owner"] == "owner-b"
+    assert reclaimed["attempt"] == 2
+
+
+def test_write_staging_retries_short_writes(tmp_path, monkeypatch):
+    staging = tmp_path / "short-write.staging"
+    payload = b"0123456789abcdef"
+    real_write = os.write
+    calls = 0
+
+    def short_write(fd, data):
+        nonlocal calls
+        calls += 1
+        return real_write(fd, data[:3])
+
+    monkeypatch.setattr(vault.os, "write", short_write)
+    vault.write_staging(staging, payload)
+
+    assert staging.read_bytes() == payload
+    assert calls > 1
+
+
+def test_write_staging_rejects_zero_byte_write(tmp_path, monkeypatch):
+    staging = tmp_path / "zero-write.staging"
+    monkeypatch.setattr(vault.os, "write", lambda _fd, _data: 0)
+
+    with pytest.raises(OSError, match="no progress"):
+        vault.write_staging(staging, b"must not be reported durable")
+
+
+def test_recovery_rejects_tampered_final_even_with_valid_staging(lab_noworker, key):
+    lab = lab_noworker
+    staging, final, _ = _prepared_paths(lab, key())
+    altered = b"externally altered final"
+    final.write_bytes(altered)
+    final.chmod(0o600)
+
+    stats = run_startup_recovery(lab.env)
+    out = _outbox(lab)
+
+    assert stats["hash_mismatch"] == 1 and stats["promoted"] == 0
+    assert out["status"] == "conflict" and out["error_code"] == C.E_HASH_MISMATCH
+    assert final.read_bytes() == altered
+    assert staging.exists()
+
+
+def test_recovery_rejects_tampered_staging_even_with_valid_final(lab_noworker, key):
+    lab = lab_noworker
+    staging, final, _ = _prepared_paths(lab, key())
+    expected = staging.read_bytes()
+    final.write_bytes(expected)
+    final.chmod(0o600)
+    staging.write_bytes(b"externally altered staging")
+
+    stats = run_startup_recovery(lab.env)
+    out = _outbox(lab)
+
+    assert stats["hash_mismatch"] == 1 and stats["readied"] == 0
+    assert out["status"] == "conflict" and out["error_code"] == C.E_HASH_MISMATCH
+    assert final.read_bytes() == expected
+    assert staging.read_bytes() == b"externally altered staging"
+
+
+@pytest.mark.parametrize("unsafe_kind", ["symlink", "directory", "mode"])
+def test_recovery_rejects_unsafe_staging_artifact(lab_noworker, key, unsafe_kind):
+    lab = lab_noworker
+    staging, final, _ = _prepared_paths(lab, key())
+
+    if unsafe_kind == "symlink":
+        target = Path(lab.tmp) / "matching-target"
+        target.write_bytes(staging.read_bytes())
+        target.chmod(0o600)
+        staging.unlink()
+        staging.symlink_to(target)
+    elif unsafe_kind == "directory":
+        staging.unlink()
+        staging.mkdir()
+    else:
+        staging.chmod(0o644)
+
+    stats = run_startup_recovery(lab.env)
+    out = _outbox(lab)
+
+    assert stats["hash_mismatch"] == 1 and stats["promoted"] == 0
+    assert out["status"] == "conflict" and out["error_code"] == C.E_HASH_MISMATCH
+    assert not final.exists()
+    if unsafe_kind == "symlink":
+        assert staging.is_symlink()
+    elif unsafe_kind == "directory":
+        assert staging.is_dir()
+    else:
+        assert stat.S_IMODE(staging.stat().st_mode) == 0o644

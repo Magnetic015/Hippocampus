@@ -70,7 +70,8 @@
 |---|---|---|
 | `/home/kkp/hippocampus/compose.yaml` | 三服务定义(digest/TAG、卷、硬化、限额) | 模板在仓库 |
 | `/home/kkp/hippocampus/hindsight.env` | Hindsight **非密钥**配置,作为 `env_file` 挂载 | 模板在仓库 |
-| `/home/kkp/hippocampus/hippocampus-mcp/` | MCP 源码 + Dockerfile(构建上下文) | 在仓库 |
+| `/home/kkp/hippocampus/hippocampus-mcp/` | MCP 源码 + Dockerfile(从父目录作为构建上下文) | 在仓库 |
+| `/home/kkp/hippocampus/scanner/` | MCP 镜像所需的本地秘密扫描器(与 `hippocampus-mcp/` 共用父级构建上下文) | 在仓库 |
 | `/home/kkp/hippocampus/scripts/` | `rollback-server.sh`、`rollback-clients.sh`、`rollback-manifest-prod.env` | 在仓库 |
 | `/home/kkp/hippocampus/vault/shared/<project>/<id>.md` | 正文真值(bind 到 MCP) | **否**(运行时数据) |
 | `/home/kkp/hippocampus/state/outbox.db` | SQLite:注册表/幂等/Outbox/审计 | **否** |
@@ -97,7 +98,7 @@
 - `HIPPOCAMPUS_TOKEN_PEPPER`、`HIPPOCAMPUS_AUDIT_HMAC_KEY`、`HIPPOCAMPUS_IDEMPOTENCY_HMAC_KEY`
 - `CLIPROXY_OPENAI_BASE_URL`(完整 OpenAI 兼容 base,含且仅含一个 `/v1`,无 userinfo/query/fragment/尾斜杠)、`CLIPROXY_KEY`
 - `PGVECTOR_DIGEST`、`HINDSIGHT_DIGEST`(拉取镜像的 digest 固定)
-- `HIPPOCAMPUS_MCP_TAG`(**现网:本地构建镜像的 tag**;模板里写的是 `HIPPOCAMPUS_MCP_DIGEST`——以现网 TAG 为准)
+- `HIPPOCAMPUS_MCP_TAG`(本地构建镜像的不可变 tag;Compose 模板与现网均使用该变量)
 - `KKP_UID`、`KKP_GID`(Pi5 上读取的数字 UID/GID)
 - 三客户端 token(如按现网:`HIPPOCAMPUS_CLAUDE_TOKEN` / `HIPPOCAMPUS_CODEX_TOKEN` / `HIPPOCAMPUS_OPENCLAW_TOKEN`)——每个 ≥256bit 随机,**互不复用**;生成:`python3 -c "import secrets;print(secrets.token_urlsafe(32))"`。
 
@@ -140,11 +141,11 @@ cp -p "$F" "$F.bak.$(date +%Y%m%d-%H%M%S)"
 # ...编辑...
 python3 -m py_compile "$F"
 
-# 1) 构建新 tag(干净重建,推荐单一来源)
-cd /home/kkp/hippocampus/hippocampus-mcp
-docker build --target production -t hippocampus-mcp:<新tag> .
+# 1) 构建新 tag(干净重建,构建上下文同时包含 MCP 与 scanner)
+cd /home/kkp/hippocampus
+docker build -f hippocampus-mcp/Dockerfile --target production -t hippocampus-mcp:<新tag> .
 #   —— 或快速叠层(仅换个别文件、免联网):
-#   printf 'FROM hippocampus-mcp:<旧tag>\nCOPY --chown=1000:1000 src/hippocampus/<file>.py /app/src/hippocampus/<file>.py\n' \
+#   printf 'FROM hippocampus-mcp:<旧tag>\nCOPY --chown=1000:1000 hippocampus-mcp/src/hippocampus/<file>.py /app/src/hippocampus/<file>.py\n' \
 #     | docker build -f - -t hippocampus-mcp:<新tag> .
 
 # 2) 改 env 里的 TAG(先备份密钥面)
@@ -195,6 +196,7 @@ docker exec "$C" python -m hippocampus.registry_cli --db "$DB" bind-peer mac-cla
 docker exec "$C" python -m hippocampus.registry_cli --db "$DB" list-safe
 ```
 > 注:计划里的 `registry-*.sh` 包装脚本未随现网 `scripts/` 下发,直接用上面的模块调用。子命令:`init/issue/rotate/revoke/grant/bind-peer/revoke-peer/list-safe`(源:`registry_cli.py`)。
+> 当前已批准的三端 PoC 凭据保持 `expires_at=NULL`；这只覆盖既有记录。客户端一键脚本在自动 `issue` **未知 client** 时仍默认 `--expires-days 14`，而 `rotate` 不改变既有期限。
 
 ### 8.2 客户端侧配置(Mac)
 `~/.claude.json`:
@@ -209,7 +211,7 @@ token 存 `~/.config/hippocampus/claude.token`(0600),**不入 shell profile / la
 - **标准版 `/Applications/Claude.app`**:经 wrapper `~/.config/hippocampus/launch-claude.command`(export token → 启动 app)。
 - **分身(多开)**:各自 `launcher` 脚本内 `export HIPPOCAMPUS_CLAUDE_TOKEN="$(cat ~/.config/hippocampus/claude.token)"` 后**直启二进制**(`open` 不透传 env),且必须 `/usr/bin/arch -arm64`(脚本型 .app 会被 LaunchServices 以 x86_64 启动,否则 Electron+claude-code 全走 Rosetta 卡死)。`Claude 分身`=Claude-2 标准模式(`--user-data-dir`);`Claude 分身GW`=Claude-gw 3p 网关模式(`CLAUDE_USER_DATA_DIR`)。
 - **禁用** `launchctl setenv`(会把 token 泄进全局 launchd 环境)。
-- **Codex** 端同理:自己的 `HIPPOCAMPUS_CODEX_TOKEN` + 对应 MCP 配置,curl 不能替代真实端到端。
+- **Codex** 端同理:自己的 `HIPPOCAMPUS_CODEX_TOKEN` + 对应 MCP 配置,curl 不能替代真实端到端。Windows 脚本生成专用 launcher，从受限 token 文件读取后只向 Codex **子进程**注入；禁止写入 User 级持久环境。
 
 ### 8.3 校验接入
 完全退出目标客户端 → 经 wrapper/launcher 重启(MCP 在客户端启动时解析,不能热接)→ 新会话确认出现 4 个 `memory_*` 工具 → 跑一次 `memory_search`(限已授权 project,如 `commissioning`)。
@@ -252,7 +254,7 @@ scripts/rollback-server.sh --manifest scripts/rollback-manifest-prod.env --execu
 清单(`rollback-manifest-prod.env`,非密钥):`ROLLBACK_PROJECT=hippocampus`、`io.hippocampus.managed=true`、`io.hippocampus.plan=v4.2`、compose 路径、`--env-file` 路径、`ROLLBACK_EXPECT_PORT=192.168.2.41:8888`(down 后校验监听消失)。
 
 ### 11.3 客户端回滚
-`scripts/rollback-clients.sh --record <TSV> [--dry-run|--execute]`;记录格式 `client_id<TAB>backup_id<TAB>backup_path<TAB>target_path`;只对 0600 备份生效,只打印安全元数据。
+`scripts/rollback-clients.sh --record <TSV> [--dry-run|--execute]`;本地清单必须为 0600,格式 `client_id<TAB>backup_id<TAB>backup_path<TAB>target_path<TAB>sha256`;脚本先核对 0600 备份的 SHA-256 再复制,输出只含安全元数据且不打印 hash。
 
 ### 11.4 Token 撤销 / 轮换
 优先 `hippocampus-registry revoke <client_id>`(只需 client_id);换 token 用 `rotate <client_id>`(新 token 走 stdin)。回滚顺序:先按 client_id 撤销三客户端 token、恢复客户端配置,再按 project 精确停 `hippocampus-mcp`、确认 8888 消失。
@@ -279,7 +281,7 @@ scripts/rollback-server.sh --manifest scripts/rollback-manifest-prod.env --execu
 
 - **搜索/reranker 延迟——当前不达 §10.4**:search p50≈8.96s、**p95≈11.3s**(目标 ≤5s;read/commit/status 皆毫秒)。根因:Pi5 ARM CPU 上 reranker 占召回 ~99%。可逆 A/B:`RERANKER_MAX_CANDIDATES` 100→20 → 2.1–2.3s(已还原 100)。**待决**:降候选数 + 重验中文召回 / 重批 p95 阈值到实测基线 / Phase 3 换 `rrf`·PGroonga·VectorChord。
 - **TLS vs LAN 明文**:Phase 1 用 LAN HTTP,Bearer 可被同网段嗅探。Go/No-Go 条 12 要求**二选一**:单独授权的内部 TLS(非 Caddy)并过三端信任验证,**或**书面接受可信 LAN 明文残余风险。**待决**。
-- **Token 轮换**:三客户端 token 14 天过期;`dockerNode-openclaw` 在 Phase 2 前禁用且无 peer 绑定;commissioning 收口时须轮换 PoC token。⚠️ **cliproxy API key 曾在对话通道泄露**,建议纳入轮换范围。
+- **Token 轮换**:既有三端 PoC token 已按「范围内 Go」批准为永久 (`expires_at=NULL`)；新 client 自动 `issue` 默认 14 天，`rotate` 保留既有期限。⚠️ **cliproxy API key 曾在对话通道泄露**,建议纳入轮换范围。
 - **中文召回质量(§10.4)未验**:Phase 0 mock 无真实 embedding/reranker,只证了检索管线;真实质量需真 Hindsight + 三端数据集导入。
 - **Docker 管理面残余**:`beszel` 监控 agent 视同 root、可读全部密钥,**已接受**、缓解未实施。
 - **Pi5 供电欠压**:`vcgencmd get_throttled` 恒为 `0x50000`(历史欠压位),负载中无活动限频、SoC 68.6°C;使 §10.8「无限频位」字面不满足,判为环境残留(建议官方 27W USB-C PD)。§10.8 资源/稳定其余**通过**(60.5min/940 请求/0 错误;峰值 db 115、hindsight 1670、MCP 94 MiB;零重启)。

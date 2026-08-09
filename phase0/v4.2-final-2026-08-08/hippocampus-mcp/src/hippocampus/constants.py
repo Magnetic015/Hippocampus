@@ -15,6 +15,7 @@ COMMISSIONING_PROJECT = "commissioning"
 
 # 07 §7.0 ingress hard limits
 MAX_BODY_BYTES = 256 * 1024
+REQUEST_BODY_TIMEOUT_S = 5.0
 MAX_JSON_DEPTH = 8
 MAX_OBJECT_FIELDS = 64
 MAX_ARRAY_ITEMS = 64
@@ -54,6 +55,15 @@ AUDIT_TERMINAL = frozenset(
 # 05 §5.1 lease contract (F4)
 RESERVATION_LEASE_TTL_S = 60
 OUTBOX_LEASE_TTL_S = 300
+# 07 §7.6 audit retention.  Maintenance runs in ordered, bounded transactions
+# so a long-lived gateway cannot grow this local metadata table without limit.
+AUDIT_RETENTION_DAYS = 90
+AUDIT_RETENTION_MAX_ROWS = 1_000_000
+AUDIT_RETENTION_BATCH_SIZE = 10_000
+AUDIT_RETENTION_MAX_BATCHES = 100
+AUDIT_RETENTION_RUN_BUDGET_S = 5.0
+AUDIT_RETENTION_INTERVAL_S = 60 * 60
+AUDIT_RETENTION_RETRY_INTERVAL_S = 60
 # 05 §5.4 worker retry
 BACKOFF_BASE_S = 5.0
 BACKOFF_CAP_S = 15 * 60.0

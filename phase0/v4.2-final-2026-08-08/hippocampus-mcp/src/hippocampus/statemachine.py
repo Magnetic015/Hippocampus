@@ -81,25 +81,26 @@ def set_outbox_status(conn, event_id: str, status: str, *, error_code: str | Non
 
 
 def claim_next_event(conn, owner: str):
-    """Worker claim: ready or due retry_wait, lease free/expired; the same atomic
+    """Worker claim: new work or an expired in-flight lease; the same atomic
     UPDATE moves the row to `indexing` and bumps attempt (05 §5.1/§5.4)."""
     t = now()
+    eligible = (
+        "(((status='ready' OR (status='retry_wait' AND next_attempt_at <= ?))"
+        " AND (lease_owner IS NULL OR lease_expires_at < ?))"
+        " OR (status='indexing' AND lease_expires_at < ?))"
+    )
     begin_immediate(conn)
     try:
         row = conn.execute(
-            "SELECT event_id FROM outbox WHERE"
-            " (status='ready' OR (status='retry_wait' AND next_attempt_at <= ?))"
-            " AND (lease_owner IS NULL OR lease_expires_at < ?)"
-            " ORDER BY created_at LIMIT 1", (t, t)).fetchone()
+            f"SELECT event_id FROM outbox WHERE {eligible}"
+            " ORDER BY created_at LIMIT 1", (t, t, t)).fetchone()
         if row is None:
             conn.execute("COMMIT")
             return None
         cur = conn.execute(
             "UPDATE outbox SET status='indexing', attempt=attempt+1, lease_owner=?,"
-            " lease_expires_at=?, updated_at=? WHERE event_id=? AND"
-            " (status='ready' OR (status='retry_wait' AND next_attempt_at <= ?))"
-            " AND (lease_owner IS NULL OR lease_expires_at < ?)",
-            (owner, t + OUTBOX_LEASE_TTL_S, t, row["event_id"], t, t))
+            f" lease_expires_at=?, updated_at=? WHERE event_id=? AND {eligible}",
+            (owner, t + OUTBOX_LEASE_TTL_S, t, row["event_id"], t, t, t))
         if cur.rowcount != 1:
             conn.execute("COMMIT")
             return None

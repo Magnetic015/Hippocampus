@@ -14,8 +14,6 @@ def run_startup_recovery(env) -> dict:
              "invariant_broken": 0, "audit_converged": 0}
     conn = connect(env.db_path)
     try:
-        stats["audit_converged"] = audit.reconcile_startup(conn, env.pid)
-
         cur = conn.execute(
             "UPDATE idempotency_reservation SET lease_owner=NULL, lease_expires_at=NULL"
             " WHERE state IN ('reserved','retryable_failed') AND lease_owner IS NOT NULL"
@@ -33,9 +31,11 @@ def run_startup_recovery(env) -> dict:
                 continue
             staging = vault.staging_path(env.vault_root, project, res["event_id"])
             final = vault.doc_path(env.vault_root, project, doc_id)
-            final_ok = final.exists() and vault.sha256_file(final) == out["desired_sha256"]
-            staging_ok = staging.exists() and vault.sha256_file(staging) == out["desired_sha256"]
-            if (final.exists() or staging.exists()) and not (final_ok or staging_ok):
+            final_exists = _artifact_exists(final)
+            staging_exists = _artifact_exists(staging)
+            final_ok = final_exists and vault.artifact_matches(final, out["desired_sha256"])
+            staging_ok = staging_exists and vault.artifact_matches(staging, out["desired_sha256"])
+            if (final_exists and not final_ok) or (staging_exists and not staging_ok):
                 # bytes present but altered: never guess or overwrite (05 §5.3)
                 sm.set_outbox_status(conn, res["event_id"], "conflict",
                                      error_code="HASH_MISMATCH", release_lease=True)
@@ -70,10 +70,26 @@ def run_startup_recovery(env) -> dict:
             env.health["invariant_broken"] = True
             stats["invariant_broken"] += 1
 
+        # Audit reconciliation must observe the artifact state after prepared
+        # reservations have converged.  In particular, a prior process may have
+        # truthfully left a request at recovery_pending before its staging file
+        # is promoted above.
+        stats["audit_converged"] = audit.reconcile_startup(conn, env.pid)
         stats["unowned_orphan"] = _count_orphans(env, conn)
     finally:
         conn.close()
     return stats
+
+
+def _artifact_exists(path: Path) -> bool:
+    """Unlike Path.exists(), count broken symlinks as existing unsafe artifacts."""
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    return True
 
 
 def _mark_stored_ready(conn, event_id: str) -> None:

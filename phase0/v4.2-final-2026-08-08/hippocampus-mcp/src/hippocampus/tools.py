@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as _dt
+import math
 import re
 import uuid
 
@@ -71,6 +72,57 @@ def scan_or_reject(env, fields: dict[str, str | None]) -> None:
         cats = sorted({c for _, cs in findings for c in cs})
         raise ToolError(C.E_SECRET_REJECTED, outcome=C.OUTCOME_SECRET_REJECTED,
                         stored=False, indexed=False, fields=paths, categories=cats)
+
+
+def _business_value_contains_request_token(ctx, value) -> bool:
+    if isinstance(value, str):
+        return ctx.business_value_contains_token(value)
+    if isinstance(value, (list, tuple)):
+        return any(_business_value_contains_request_token(ctx, item) for item in value)
+    if isinstance(value, dict):
+        return any(
+            _business_value_contains_request_token(ctx, key)
+            or _business_value_contains_request_token(ctx, item)
+            for key, item in value.items()
+        )
+    return False
+
+
+def _raise_request_token(fields: set[str]) -> None:
+    raise ToolError(
+        C.E_SECRET_REJECTED,
+        outcome=C.OUTCOME_SECRET_REJECTED,
+        stored=False,
+        indexed=False,
+        fields=sorted(fields),
+        categories=["token"],
+    )
+
+
+def reject_envelope_request_token(ctx, envelope: dict) -> None:
+    params = envelope.get("params")
+    tool_name = params.get("name") if isinstance(params, dict) else None
+    fields = {
+        field for field, value in (
+            ("jsonrpc_id", envelope.get("id")),
+            ("jsonrpc_method", envelope.get("method")),
+            ("jsonrpc_tool_name", tool_name),
+        )
+        if _business_value_contains_request_token(ctx, value)
+    }
+    if fields:
+        _raise_request_token(fields)
+
+
+def reject_request_token(ctx, args: dict) -> None:
+    fields: set[str] = set()
+    for name, value in args.items():
+        if not _business_value_contains_request_token(ctx, value):
+            continue
+        field = "filters" if name == "source" else name
+        fields.add(field if field in C.FIELD_PATHS else C.UNKNOWN_FIELD)
+    if fields:
+        _raise_request_token(fields)
 
 
 def _strict_schema(args: dict, required: dict[str, type], optional: dict[str, type],
@@ -233,7 +285,19 @@ def _commit_files(env, ctx, res, args: dict, detail: str | None, event_at: str, 
     if existing_out is None:
         try:
             failpoints.hit("commit.staging.before")
-            if not staging.exists():
+            staging_present = staging.exists() or staging.is_symlink()
+            if staging_present:
+                try:
+                    vault.refuse_symlink(staging)
+                    staging_valid = vault.artifact_matches(staging, desired_sha)
+                except vault.VaultError:
+                    staging_valid = False
+                if not staging_valid:
+                    sm.set_reservation_state(conn, res["event_id"], "conflict",
+                                             release_lease=True)
+                    _finalize_quiet(conn, ctx, "error", C.E_HASH_MISMATCH)
+                    raise ToolError(C.E_HASH_MISMATCH, state="error")
+            else:
                 vault.write_staging(staging, md)
             failpoints.hit("commit.staging.after")
         except ToolError:
@@ -244,6 +308,7 @@ def _commit_files(env, ctx, res, args: dict, detail: str | None, event_at: str, 
             _finalize_quiet(conn, ctx, "error", "retryable_failed")
             raise ToolError(C.E_UNAVAILABLE, state="error", outcome="retryable_failed",
                             retryable=True) from None
+        prepared_committed = False
         try:
             failpoints.hit("commit.prepared.before")
             sm.begin_immediate(conn)
@@ -251,8 +316,14 @@ def _commit_files(env, ctx, res, args: dict, detail: str | None, event_at: str, 
             sm.set_reservation_state(conn, res["event_id"], "prepared")
             audit.set_state(conn, ctx.request_id, "prepared")
             conn.execute("COMMIT")
+            prepared_committed = True
             failpoints.hit("commit.prepared.after")
         except BaseException:
+            if prepared_committed:
+                _finalize_quiet(conn, ctx, "recovery_pending", "prepared_followup_failed")
+                return {"accepted": True, "stored": False, "indexed": False,
+                        "index_state": "recovery_pending", "document_id": res["document_id"],
+                        "uri": res["uri"]}
             if conn.in_transaction:
                 conn.execute("ROLLBACK")
             staging.unlink(missing_ok=True)
@@ -296,15 +367,57 @@ def _commit_files(env, ctx, res, args: dict, detail: str | None, event_at: str, 
             "document_id": res["document_id"], "uri": res["uri"]}
 
 
-def _finalize_quiet(conn, ctx, state: str, outcome: str) -> None:
+def _finalize_quiet(conn, ctx, state: str, outcome: str) -> bool:
     try:
         audit.finalize(conn, ctx.request_id, state, outcome)
         ctx.audit_done = True
+        return True
     except AuditError:
-        ctx.audit_done = True
+        return False
 
 
 # ---------------------------------------------------------------- memory_search
+
+def _valid_recall_event_at(value: str) -> bool:
+    if value == "unset":
+        return True
+    try:
+        parsed = _dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None
+
+
+def _recall_score(fact: dict) -> float | None:
+    scores = fact.get("scores")
+    value = scores.get("final") if isinstance(scores, dict) else fact.get("score")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    score = float(value)
+    return score if math.isfinite(score) else None
+
+
+def _search_provenance_matches(
+        env, conn, res, out, document_id: str, uri: str, source_agent: str) -> bool:
+    if res is None or out is None:
+        return False
+    rows_match = (
+        res["state"] == "stored"
+        and out["status"] == "indexed"
+        and res["event_id"] == out["event_id"]
+        and res["root_request_id"] == out["root_request_id"]
+        and res["client_id"] == out["client_id"]
+        and res["idempotency_key"] == out["idempotency_key"]
+        and res["server_bank_id"] == env.bank == out["server_bank_id"]
+        and res["document_id"] == document_id == out["document_id"]
+        and res["uri"] == uri == out["uri"]
+    )
+    if not rows_match:
+        return False
+    client = conn.execute(
+        "SELECT source_tag FROM clients WHERE client_id=?", (res["client_id"],)).fetchone()
+    return client is not None and client["source_tag"] == source_agent
+
 
 def memory_search(env, ctx, args: dict) -> dict:
     _strict_schema(args, {"query": str, "project": str}, {"type": str, "source": str})
@@ -312,9 +425,7 @@ def memory_search(env, ctx, args: dict) -> dict:
         raise ToolError(C.E_LIMIT_EXCEEDED, fields=["query"])
     if not vault.PROJECT_RE.match(args["project"]):
         raise ToolError(C.E_SCHEMA_REJECTED, fields=["project"])
-    ensure_scanner(env)
-    if env.scan_text(args["query"]):
-        raise ToolError(C.E_SECRET_REJECTED, outcome=C.OUTCOME_SECRET_REJECTED, fields=["query"])
+    scan_or_reject(env, {"query": args["query"]})
     ctx.query_hmac, ctx.query_len = audit.safe_query_hmac(env.audit_key, args["query"])
     if "type" in args and args["type"] not in C.TYPES:
         raise ToolError(C.E_SCHEMA_REJECTED, fields=["type"])
@@ -335,65 +446,101 @@ def memory_search(env, ctx, args: dict) -> dict:
         raw = env.hindsight.recall(env.bank, args["query"], tag_groups,
                                    budget=C.RECALL_BUDGET, max_tokens=C.RECALL_MAX_TOKENS)
     except HindsightError:
+        env.index_backend_down = True
         raise ToolError(C.E_INDEX_UNAVAILABLE, state="error", outcome="index_unavailable",
                         retryable=True) from None
-
-    def fact_text(f: dict) -> str:
-        # Hindsight v0.9.0 recall returns the fact body as `text`.
-        return f.get("text") or f.get("content") or ""
-
-    def fact_score(f: dict) -> float:
-        # ...and its ranking under `scores.final` (plan §7.1 sorts on final).
-        scores = f.get("scores")
-        if isinstance(scores, dict):
-            return float(scores.get("final", 0.0))
-        return float(f.get("score", 0.0))
+    env.index_backend_down = False
 
     groups: dict[str, dict] = {}
-    for fact in raw.get("results", []):
+    results = raw.get("results", []) if isinstance(raw, dict) else []
+    if not isinstance(results, list):
+        results = []
+    known_sources = env.known_source_tags()
+    for fact in results:
+        if not isinstance(fact, dict):
+            continue
         doc = fact.get("document_id")
         if not isinstance(doc, str):
             continue
-        group = groups.setdefault(doc, {"facts": [], "bad": False})
-        group["facts"].append(fact)
-        meta = fact.get("metadata") or {}
-        tags = fact.get("tags") or []
-        project_tags = [t for t in tags if isinstance(t, str) and t.startswith("project:")]
+        group = groups.setdefault(doc, {
+            "facts": [], "bad": False, "metas": set(), "tagsets": set(),
+        })
+        meta = fact.get("metadata")
+        tags = fact.get("tags")
+        text = fact.get("text") or fact.get("content")
+        score = _recall_score(fact)
+        required_meta = (
+            "uri", "project", "source_agent", "event_at", "index_title", "index_summary",
+            "trust", "sensitivity", "retrieval_sha256",
+        )
+        if (not isinstance(meta, dict) or not isinstance(tags, list)
+                or not all(isinstance(tag, str) for tag in tags)
+                or len(tags) > C.MAX_ARRAY_ITEMS or len(tags) != len(set(tags))
+                or not isinstance(text, str) or score is None
+                or not all(isinstance(meta.get(name), str) for name in required_meta)):
+            group["bad"] = True
+            continue
+
+        project_tags = [tag for tag in tags if tag.startswith("project:")]
+        source_tags = [tag for tag in tags if tag.startswith("src:")]
+        type_tags = [tag for tag in tags if tag.startswith("type:")]
         try:
-            uproj, udoc = vault.parse_uri(meta.get("uri", ""))
+            uproj, udoc = vault.parse_uri(meta["uri"])
         except vault.VaultError:
             group["bad"] = True
             continue
-        if (project_tags != [f"project:{args['project']}"] or "scope:shared" not in tags
-                or uproj != args["project"] or udoc != doc
-                or not isinstance(meta.get("event_at"), str)):
+        if (
+            project_tags != [f"project:{args['project']}"]
+            or source_tags != [f"src:{meta['source_agent']}"]
+            or len(type_tags) != 1 or type_tags[0][5:] not in C.TYPES
+            or meta["project"] != args["project"] or uproj != args["project"] or udoc != doc
+            or meta["source_agent"] not in known_sources
+            or meta["trust"] != "agent" or meta["sensitivity"] != "internal"
+            or "scope:shared" not in tags or "trust:agent" not in tags
+            or "sensitivity:internal" not in tags
+            or not _valid_recall_event_at(meta["event_at"])
+            or textlimits.scalar_len(meta["index_title"]) > C.MAX_TITLE_SCALARS
+            or not (C.SUMMARY_MIN_SCALARS
+                    <= textlimits.scalar_len(meta["index_summary"])
+                    <= C.SUMMARY_MAX_SCALARS)
+            or re.fullmatch(r"[0-9a-f]{64}", meta["retrieval_sha256"]) is None
+            or ("type" in args and f"type:{args['type']}" not in tags)
+            or (source is not None and f"src:{source}" not in tags)
+        ):
             group["bad"] = True
+            continue
+
+        returned_strings = [
+            doc, meta["uri"], meta["index_title"], meta["index_summary"], text,
+            *tags, meta["source_agent"], meta["trust"], meta["event_at"],
+        ]
+        if any(env.scan_text(value) for value in returned_strings):
+            group["bad"] = True
+            continue
+        group["facts"].append({"text": text, "score": score, "meta": meta, "tags": tags})
+        group["metas"].add(tuple((name, meta[name]) for name in required_meta))
+        group["tagsets"].add(tuple(sorted(tags)))
+
     cards = []
     for doc, group in groups.items():
-        if group["bad"]:
+        if (group["bad"] or not group["facts"] or len(group["metas"]) != 1
+                or len(group["tagsets"]) != 1):
             continue
-        metas = {tuple(sorted((f.get("metadata") or {}).items())) for f in group["facts"]}
-        tagsets = {tuple(sorted(f.get("tags") or [])) for f in group["facts"]}
-        uris = {(f.get("metadata") or {}).get("uri") for f in group["facts"]}
-        if len(metas) > 1 or len(tagsets) > 1 or len(uris) > 1:
-            continue
-        best = max(group["facts"], key=fact_score)
-        meta = best.get("metadata") or {}
-        card_texts = [meta.get("index_title", ""), meta.get("index_summary", ""), fact_text(best)]
-        if any(env.scan_text(t) for t in card_texts if t):
-            continue
+        best = max(group["facts"], key=lambda fact: fact["score"])
+        meta = best["meta"]
         res_row, out_row = sm.status_by_ref(ctx.conn, document_id=doc)
-        index_state = (C.index_state_projection(out_row["status"] if out_row else None,
-                                                res_row["state"]) if res_row else "conflict")
+        if not _search_provenance_matches(
+                env, ctx.conn, res_row, out_row, doc, meta["uri"], meta["source_agent"]):
+            continue
         cards.append({
-            "score": fact_score(best),
+            "score": best["score"],
             "card": {
-                "document_id": doc, "uri": meta.get("uri"),
-                "index_title": meta.get("index_title"), "index_summary": meta.get("index_summary"),
-                "safe_snippet": fact_text(best)[:512],
-                "tags": sorted(best.get("tags") or []), "source_agent": meta.get("source_agent"),
-                "trust": meta.get("trust"), "event_at": meta.get("event_at"),
-                "index_state": index_state,
+                "document_id": doc, "uri": meta["uri"],
+                "index_title": meta["index_title"], "index_summary": meta["index_summary"],
+                "safe_snippet": best["text"][:512],
+                "tags": sorted(best["tags"]), "source_agent": meta["source_agent"],
+                "trust": meta["trust"], "event_at": meta["event_at"],
+                "index_state": C.index_state_projection(out_row["status"], res_row["state"]),
             },
         })
     cards.sort(key=lambda c: c["score"], reverse=True)
@@ -401,6 +548,41 @@ def memory_search(env, ctx, args: dict) -> dict:
 
 
 # ------------------------------------------------------------------ memory_read
+
+def _read_reservation_matches(env, res, document_id: str, uri: str) -> bool:
+    return (
+        res is not None
+        and res["server_bank_id"] == env.bank
+        and res["document_id"] == document_id
+        and res["uri"] == uri
+    )
+
+
+def _read_outbox_matches(env, res, out, document_id: str, uri: str) -> bool:
+    return (
+        out is not None
+        and out["event_id"] == res["event_id"]
+        and out["root_request_id"] == res["root_request_id"]
+        and out["client_id"] == res["client_id"]
+        and out["idempotency_key"] == res["idempotency_key"]
+        and out["server_bank_id"] == env.bank
+        and out["document_id"] == document_id
+        and out["uri"] == uri
+    )
+
+
+def _mark_read_hash_conflict(conn, event_id: str) -> None:
+    sm.begin_immediate(conn)
+    try:
+        sm.set_outbox_status(conn, event_id, "conflict", error_code=C.E_HASH_MISMATCH,
+                             release_lease=True)
+        sm.set_reservation_state(conn, event_id, "conflict", release_lease=True)
+        conn.execute("COMMIT")
+    except BaseException:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+
 
 def memory_read(env, ctx, args: dict) -> dict:
     _strict_schema(args, {"uris": list}, {})
@@ -416,28 +598,42 @@ def memory_read(env, ctx, args: dict) -> dict:
         except vault.VaultError:
             raise ToolError(C.E_SCHEMA_REJECTED, fields=["uris"]) from None
         _authorize(env, ctx, action="read", project=project)
-        path = vault.doc_path(env.vault_root, project, doc_id)
-        vault.refuse_symlink(path)
         res_row, out_row = sm.status_by_ref(ctx.conn, document_id=doc_id)
-        if res_row is None:  # unowned orphans are never readable (05 §5.3)
+        if not _read_reservation_matches(env, res_row, doc_id, uri):
             raise ToolError(C.E_NOT_FOUND)
-        if out_row is not None and out_row["status"] in ("policy_blocked", "conflict"):
+        if not _read_outbox_matches(env, res_row, out_row, doc_id, uri):
+            raise ToolError(C.E_STATE_INVARIANT)
+        if out_row["status"] in ("policy_blocked", "conflict"):
             raise ToolError(C.E_POLICY_BLOCKED if out_row["status"] == "policy_blocked"
                             else C.E_STATE_INVARIANT)
+        if (res_row["state"] != "stored"
+                or out_row["status"] not in ("ready", "indexing", "retry_wait",
+                                             "indexed", "dead")):
+            raise ToolError(C.E_STATE_INVARIANT)
+        path = vault.doc_path(env.vault_root, project, doc_id)
+        vault.refuse_symlink(path)
         if not path.exists():
             raise ToolError(C.E_NOT_FOUND)
         data = path.read_bytes()
         if len(data) > C.MAX_READ_DOC_BYTES:
             raise ToolError(C.E_LIMIT_EXCEEDED, fields=["uris"])
-        if out_row is not None and vault.sha256_bytes(data) != out_row["desired_sha256"]:
-            if env.scan_text(data.decode("utf-8", errors="replace")):
+        if vault.sha256_bytes(data) != out_row["desired_sha256"]:
+            _mark_read_hash_conflict(ctx.conn, out_row["event_id"])
+            raise ToolError(C.E_STATE_INVARIANT, outcome=C.E_HASH_MISMATCH)
+        decoded = data.decode("utf-8", errors="replace")
+        if out_row["scan_policy_version"] != env.spv:
+            if env.scan_text(decoded):
                 sm.set_outbox_status(ctx.conn, out_row["event_id"], "policy_blocked",
-                                     error_code=C.E_POLICY_BLOCKED)
+                                     error_code=C.E_POLICY_BLOCKED, release_lease=True)
+                ctx.conn.execute("UPDATE outbox SET scan_policy_version=? WHERE event_id=?",
+                                 (env.spv, out_row["event_id"]))
                 raise ToolError(C.E_POLICY_BLOCKED)
+            ctx.conn.execute("UPDATE outbox SET scan_policy_version=? WHERE event_id=?",
+                             (env.spv, out_row["event_id"]))
         total += len(data)
         if total > C.MAX_READ_TOTAL_BYTES:
             raise ToolError(C.E_LIMIT_EXCEEDED, fields=["uris"])
-        docs.append({"uri": uri, "markdown": data.decode("utf-8", errors="replace")})
+        docs.append({"uri": uri, "markdown": decoded})
     return {"documents": docs}
 
 

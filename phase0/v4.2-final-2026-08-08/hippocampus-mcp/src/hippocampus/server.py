@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import threading
 import time
 import uuid
@@ -49,11 +50,17 @@ class Env:
         self.backoff_base = backoff_base
         self.scanner_down = False
         self.index_backend_down = False
-        self.health = {"durability_gap": False, "invariant_broken": False}
+        self.health = {
+            "durability_gap": False,
+            "invariant_broken": False,
+            "audit_sink_down": False,
+            "audit_retention_failed": False,
+        }
         self.counters = {"source_denied": 0, "auth_failed": 0, "audit_unavailable": 0}
-        self._source_tags: frozenset[str] | None = None
         self._event_locks: dict[str, threading.Lock] = {}
         self._event_locks_mu = threading.Lock()
+        self._audit_retention_mu = threading.Lock()
+        self._audit_retention_last_attempt: float | None = None
 
     def try_lock_event(self, event_id: str) -> bool:
         """In-process complement of the DB lease: only one in-flight request per
@@ -69,18 +76,60 @@ class Env:
             lock.release()
 
     def known_source_tags(self) -> frozenset[str]:
-        if self._source_tags is None:
+        # Registry changes are made by a separate CLI process, so a process-local
+        # cache would reject newly issued, already valid source tags until restart.
+        conn = connect(self.db_path)
+        try:
+            return frozenset(r["source_tag"] for r in conn.execute(
+                "SELECT source_tag FROM clients"))
+        finally:
+            conn.close()
+
+    def audit_failed(self) -> None:
+        self.health["audit_sink_down"] = True
+        self.counters["audit_unavailable"] += 1
+
+    def audit_recovered(self) -> None:
+        self.health["audit_sink_down"] = False
+
+    def maintain_audit_retention(
+            self, *, force: bool = False, monotonic_now: float | None = None) -> bool:
+        """Run retention at startup or when the hourly maintenance gate is due."""
+        attempt_at = time.monotonic() if monotonic_now is None else monotonic_now
+        if not self._audit_retention_mu.acquire(blocking=False):
+            return not self.health["audit_retention_failed"]
+        conn = None
+        try:
+            last = self._audit_retention_last_attempt
+            interval = (C.AUDIT_RETENTION_RETRY_INTERVAL_S
+                        if self.health["audit_retention_failed"]
+                        else C.AUDIT_RETENTION_INTERVAL_S)
+            if (not force and last is not None
+                    and attempt_at - last < interval):
+                return not self.health["audit_retention_failed"]
+            # Record attempts, including failures, so a persistent failure cannot
+            # turn frequent readiness traffic into an unbounded write loop.
+            self._audit_retention_last_attempt = attempt_at
             conn = connect(self.db_path)
-            try:
-                self._source_tags = frozenset(
-                    r["source_tag"] for r in conn.execute("SELECT source_tag FROM clients"))
-            finally:
-                conn.close()
-        return self._source_tags
+            audit.enforce_retention(conn)
+            self.health["audit_retention_failed"] = False
+            self.audit_recovered()
+            return True
+        except Exception:
+            self.health["audit_retention_failed"] = True
+            self.audit_failed()
+            return False
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            self._audit_retention_mu.release()
 
 
 class _Ctx:
-    def __init__(self, request_id: str, client_row, conn):
+    def __init__(self, request_id: str, client_row, conn, bearer_token: str):
         self.request_id = request_id
         self.client_row = client_row
         self.client_id = client_row["client_id"]
@@ -89,6 +138,19 @@ class _Ctx:
         self.audit_done = False
         self.query_hmac: str | None = None
         self.query_len: int | None = None
+        self._request_token: bytearray | None = bytearray(bearer_token, "utf-8")
+
+    def business_value_contains_token(self, value: str) -> bool:
+        token = self._request_token
+        if not token:
+            return False
+        return value.encode("utf-8", errors="surrogatepass").find(token) >= 0
+
+    def clear_request_token(self) -> None:
+        token = self._request_token
+        if token is not None:
+            token[:] = b"\x00" * len(token)
+            self._request_token = None
 
 
 def _tool_schemas() -> list[dict]:
@@ -112,6 +174,42 @@ def _tool_schemas() -> list[dict]:
          "inputSchema": {"type": "object", "properties": {
              "document_id": {"type": "string"}, "idempotency_key": {"type": "string"}}}},
     ]
+
+
+def _probe_audit_sink(env: Env) -> bool:
+    """Commit a no-residue audit-table write to prove the sink is writable."""
+    conn = None
+    probe_id = f"ready-{uuid.uuid4().hex}"
+    try:
+        conn = connect(env.db_path)
+        # A health request must complete before the container probe timeout even
+        # if another writer is wedged.
+        conn.execute("PRAGMA busy_timeout=1000")
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            "INSERT INTO audit (request_id, ts, process_instance_id, state, outcome_code)"
+            " VALUES (?,?,?,?,?)",
+            (probe_id, int(time.time()), env.pid, "ok", "readiness_probe"),
+        )
+        conn.execute("DELETE FROM audit WHERE request_id=?", (probe_id,))
+        conn.execute("COMMIT")
+        env.audit_recovered()
+        return True
+    except Exception:
+        env.health["audit_sink_down"] = True
+        if conn is not None:
+            try:
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK")
+            except Exception:
+                pass
+        return False
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def make_handler(env: Env):
@@ -139,8 +237,8 @@ def make_handler(env: Env):
             self._send(status, {"jsonrpc": "2.0", "id": rpc_id,
                                 "error": {"code": code, "message": message}})
 
-        def _rpc_result(self, rpc_id, result: dict):
-            self._send(200, {"jsonrpc": "2.0", "id": rpc_id, "result": result})
+        def _rpc_result(self, rpc_id, result: dict, *, status: int = 200):
+            self._send(status, {"jsonrpc": "2.0", "id": rpc_id, "result": result})
 
         # ------------------------------------------------------------- routes
         def do_GET(self):
@@ -179,13 +277,11 @@ def make_handler(env: Env):
                 return self._send(200, {"status": "alive"})
             if path == "/version":
                 return self._send(200, {"version": C.VERSION})
-            down = env.scanner_down or env.health["durability_gap"] or env.health["invariant_broken"]
-            try:
-                conn = connect(env.db_path)
-                conn.execute("SELECT 1")
-                conn.close()
-            except Exception:
-                down = True
+            down = (env.scanner_down
+                    or env.health["durability_gap"]
+                    or env.health["invariant_broken"]
+                    or env.health["audit_retention_failed"]
+                    or not _probe_audit_sink(env))
             if down:
                 return self._send(503, {"status": "down"})
             if env.index_backend_down:
@@ -200,8 +296,9 @@ def make_handler(env: Env):
             try:
                 conn = connect(env.db_path)
             except Exception:
-                env.counters["audit_unavailable"] += 1
+                env.audit_failed()
                 return self._send(503, {"error": C.E_UNAVAILABLE})
+            ctx = None
             try:
                 try:
                     gate = registry.union_gate(conn)
@@ -213,90 +310,210 @@ def make_handler(env: Env):
                     try:
                         audit.insert_unauth(conn, request_id, env.pid, peer, C.OUTCOME_SOURCE_DENIED)
                     except AuditError:
-                        pass
+                        env.audit_failed()
                     return self._send(403, {"error": "forbidden"})
 
                 header = self.headers.get("Authorization", "")
                 token = header[7:] if header.startswith("Bearer ") else ""
                 client_row = registry.find_client_by_token(conn, token, env.pepper) if token else None
-                del header, token
                 if client_row is None:
+                    del header, token
                     env.counters["auth_failed"] += 1
                     try:
                         audit.insert_unauth(conn, request_id, env.pid, peer, C.OUTCOME_AUTH_FAILED)
                     except AuditError:
-                        pass
+                        env.audit_failed()
                     return self._send(401, {"error": "unauthorized"})
+                ctx = _Ctx(request_id, client_row, conn, token)
+                del header, token
 
                 try:
                     audit.insert_started(conn, request_id, env.pid, client_row["client_id"], env.spv)
                 except AuditError:
-                    env.counters["audit_unavailable"] += 1
+                    env.audit_failed()
                     return self._send(503, {"error": C.E_AUDIT_UNAVAILABLE})
 
                 if not registry.peer_bound(conn, client_row["client_id"], peer):
-                    self._finalize_quiet(conn, request_id, "rejected", C.OUTCOME_SOURCE_MISMATCH)
+                    if not self._finalize_quiet(
+                            conn, request_id, "rejected", C.OUTCOME_SOURCE_MISMATCH):
+                        return self._send(503, {"error": C.E_AUDIT_UNAVAILABLE})
                     return self._send(403, {"error": "forbidden"})
 
-                ctx = _Ctx(request_id, client_row, conn)
                 if http_method == "GET":
-                    audit.set_envelope(conn, request_id, "session_get", None)
-                    self._finalize_quiet(conn, request_id, "ok", "session_get")
+                    try:
+                        audit.set_envelope(conn, request_id, "session_get", None)
+                    except AuditError:
+                        env.audit_failed()
+                        self._finalize_quiet(conn, request_id, "error", "audit_unavailable")
+                        return self._send(503, {"error": C.E_AUDIT_UNAVAILABLE})
+                    if not self._finalize_quiet(conn, request_id, "ok", "session_get"):
+                        return self._send(503, {"error": C.E_AUDIT_UNAVAILABLE})
                     return self._send(204, None)
                 if http_method == "DELETE":
-                    audit.set_envelope(conn, request_id, "session_delete", None)
-                    self._finalize_quiet(conn, request_id, "ok", "session_delete")
+                    try:
+                        audit.set_envelope(conn, request_id, "session_delete", None)
+                    except AuditError:
+                        env.audit_failed()
+                        self._finalize_quiet(conn, request_id, "error", "audit_unavailable")
+                        return self._send(503, {"error": C.E_AUDIT_UNAVAILABLE})
+                    if not self._finalize_quiet(conn, request_id, "ok", "session_delete"):
+                        return self._send(503, {"error": C.E_AUDIT_UNAVAILABLE})
                     return self._send(204, None)
                 return self._mcp_post(ctx, start)
             finally:
+                if ctx is not None:
+                    ctx.clear_request_token()
                 conn.close()
 
         def _finalize_quiet(self, conn, request_id, state, outcome, **kw) -> bool:
             try:
                 audit.finalize(conn, request_id, state, outcome, **kw)
+                env.audit_recovered()
                 return True
             except AuditError:
-                env.counters["audit_unavailable"] += 1
+                env.audit_failed()
                 return False
+
+        def _read_request_body(self, length: int) -> bytes:
+            previous_timeout = self.connection.gettimeout()
+            deadline = time.monotonic() + C.REQUEST_BODY_TIMEOUT_S
+            chunks: list[bytes] = []
+            remaining = length
+            try:
+                # A single socket timeout is only an idle timeout: a peer can keep
+                # the thread alive indefinitely by dripping one byte before each
+                # expiry.  Recompute the remaining wall-clock budget for every raw
+                # buffered read so the whole body has one absolute deadline.
+                while remaining:
+                    timeout = deadline - time.monotonic()
+                    if timeout <= 0:
+                        raise TimeoutError("request body deadline exceeded")
+                    self.connection.settimeout(timeout)
+                    chunk = self.rfile.read1(remaining)
+                    if not chunk:
+                        break
+                    if not isinstance(chunk, bytes) or len(chunk) > remaining:
+                        raise OSError("invalid request body read")
+                    chunks.append(chunk)
+                    remaining -= len(chunk)
+                return b"".join(chunks)
+            finally:
+                try:
+                    self.connection.settimeout(previous_timeout)
+                except OSError:
+                    self.close_connection = True
 
         def _mcp_post(self, ctx: _Ctx, start: float):
             conn = ctx.conn
             if self.headers.get("Content-Encoding"):
-                self._finalize_quiet(conn, ctx.request_id, "rejected", "envelope_rejected")
+                self.close_connection = True  # unread body must not enter the next request
+                if not self._finalize_quiet(
+                        conn, ctx.request_id, "rejected", "envelope_rejected"):
+                    return self._rpc_error(503, None, -32000, C.E_AUDIT_UNAVAILABLE)
                 return self._rpc_error(415, None, -32600, "rejected")
             ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip()
             if ctype != "application/json":
-                self._finalize_quiet(conn, ctx.request_id, "rejected", "envelope_rejected")
+                self.close_connection = True
+                if not self._finalize_quiet(
+                        conn, ctx.request_id, "rejected", "envelope_rejected"):
+                    return self._rpc_error(503, None, -32000, C.E_AUDIT_UNAVAILABLE)
                 return self._rpc_error(415, None, -32600, "rejected")
-            length = int(self.headers.get("Content-Length") or 0)
+
+            length_header = self.headers.get("Content-Length")
+            if (not isinstance(length_header, str)
+                    or not length_header.isascii()
+                    or not length_header.isdigit()
+                    or len(length_header) > 20):
+                self.close_connection = True
+                if not self._finalize_quiet(
+                        conn, ctx.request_id, "rejected", "envelope_rejected"):
+                    return self._rpc_error(503, None, -32000, C.E_AUDIT_UNAVAILABLE)
+                return self._rpc_error(400, None, -32600, "rejected")
+            try:
+                length = int(length_header)
+            except ValueError:  # defense in depth for interpreter conversion limits
+                self.close_connection = True
+                if not self._finalize_quiet(
+                        conn, ctx.request_id, "rejected", "envelope_rejected"):
+                    return self._rpc_error(503, None, -32000, C.E_AUDIT_UNAVAILABLE)
+                return self._rpc_error(400, None, -32600, "rejected")
             if length <= 0 or length > C.MAX_BODY_BYTES:
-                self._finalize_quiet(conn, ctx.request_id, "rejected", "envelope_rejected")
+                self.close_connection = True
+                if not self._finalize_quiet(
+                        conn, ctx.request_id, "rejected", "envelope_rejected"):
+                    return self._rpc_error(503, None, -32000, C.E_AUDIT_UNAVAILABLE)
                 return self._rpc_error(413, None, -32600, "rejected")
-            raw = self.rfile.read(length)
+            try:
+                raw = self._read_request_body(length)
+            except (socket.timeout, TimeoutError):
+                self.close_connection = True
+                if not self._finalize_quiet(
+                        conn, ctx.request_id, "rejected", "body_read_timeout"):
+                    return self._rpc_error(503, None, -32000, C.E_AUDIT_UNAVAILABLE)
+                return self._rpc_error(408, None, -32600, "rejected")
+            except OSError:
+                self.close_connection = True
+                if not self._finalize_quiet(
+                        conn, ctx.request_id, "rejected", "body_read_failed"):
+                    return self._rpc_error(503, None, -32000, C.E_AUDIT_UNAVAILABLE)
+                return self._rpc_error(400, None, -32600, "rejected")
+            if not isinstance(raw, bytes) or len(raw) != length:
+                self.close_connection = True
+                if not self._finalize_quiet(
+                        conn, ctx.request_id, "rejected", "body_read_incomplete"):
+                    return self._rpc_error(503, None, -32000, C.E_AUDIT_UNAVAILABLE)
+                return self._rpc_error(400, None, -32600, "rejected")
 
             try:
                 envelope = ingress.parse_envelope(raw)
             except ingress.IngressError:
-                self._finalize_quiet(conn, ctx.request_id, "rejected", "envelope_rejected")
+                if not self._finalize_quiet(
+                        conn, ctx.request_id, "rejected", "envelope_rejected"):
+                    return self._rpc_error(503, None, -32000, C.E_AUDIT_UNAVAILABLE)
                 return self._rpc_error(400, None, -32600, "rejected")
 
             if env.scanner_down:
-                self._finalize_quiet(conn, ctx.request_id, "rejected", "scanner_unavailable")
+                if not self._finalize_quiet(
+                        conn, ctx.request_id, "rejected", "scanner_unavailable"):
+                    return self._rpc_error(503, None, -32000, C.E_AUDIT_UNAVAILABLE)
                 return self._rpc_error(503, None, -32000, C.E_SCAN_UNAVAILABLE)
+            try:
+                tools.reject_envelope_request_token(ctx, envelope)
+            except tools.ToolError as err:
+                ok = self._finalize_quiet(
+                    conn, ctx.request_id, err.state, err.outcome,
+                    redacted_fields=err.extra.get("fields"),
+                    redacted_categories=err.extra.get("categories"))
+                if not ok:
+                    return self._rpc_result(None, _tool_text(
+                        {"code": C.E_AUDIT_UNAVAILABLE, "retryable": True}, is_error=True))
+                body = err.payload()
+                http_status = body.pop("http_status", 200)
+                return self._rpc_result(
+                    None, _tool_text(body, is_error=True), status=http_status)
             if any(env.scan_text(t) for t in ingress.envelope_scan_texts(envelope)):
-                self._finalize_quiet(conn, ctx.request_id, "rejected", C.OUTCOME_SECRET_REJECTED)
+                if not self._finalize_quiet(
+                        conn, ctx.request_id, "rejected", C.OUTCOME_SECRET_REJECTED):
+                    return self._rpc_error(503, None, -32000, C.E_AUDIT_UNAVAILABLE)
                 return self._rpc_error(400, None, -32600, "rejected")
 
             rpc_id = envelope["id"]
             operation = ingress.map_operation(envelope["method"])
             if operation is None:
-                self._finalize_quiet(conn, ctx.request_id, "rejected", "invalid_operation")
+                if not self._finalize_quiet(
+                        conn, ctx.request_id, "rejected", "invalid_operation"):
+                    return self._rpc_error(503, None, -32000, C.E_AUDIT_UNAVAILABLE)
                 return self._rpc_error(404, None, -32601, "method not found")
 
             tool_enum = None
             if operation == "tools_call":
                 tool_enum, _ = ingress.map_tool(envelope["params"].get("name"))
-            audit.set_envelope(conn, ctx.request_id, operation, tool_enum)
+            try:
+                audit.set_envelope(conn, ctx.request_id, operation, tool_enum)
+            except AuditError:
+                env.audit_failed()
+                self._finalize_quiet(conn, ctx.request_id, "error", "audit_unavailable")
+                return self._rpc_error(503, None, -32000, C.E_AUDIT_UNAVAILABLE)
 
             latency = lambda: int((time.monotonic() - start) * 1000)  # noqa: E731
 
@@ -309,8 +526,9 @@ def make_handler(env: Env):
                     "serverInfo": {"name": "hippocampus", "version": C.VERSION},
                     "capabilities": {"tools": {}}})
             if operation == "initialized":
-                self._finalize_quiet(conn, ctx.request_id, "ok", "initialized",
-                                     latency_ms=latency())
+                if not self._finalize_quiet(conn, ctx.request_id, "ok", "initialized",
+                                            latency_ms=latency()):
+                    return self._rpc_error(503, None, -32000, C.E_AUDIT_UNAVAILABLE)
                 return self._send(202, None)
             if operation == "tools_list":
                 if not self._finalize_quiet(conn, ctx.request_id, "ok", "tools_list",
@@ -320,30 +538,42 @@ def make_handler(env: Env):
 
             # tools_call
             if tool_enum == C.INVALID_TOOL:
-                self._finalize_quiet(conn, ctx.request_id, "rejected", C.INVALID_TOOL,
-                                     latency_ms=latency())
+                if not self._finalize_quiet(conn, ctx.request_id, "rejected", C.INVALID_TOOL,
+                                            latency_ms=latency()):
+                    return self._rpc_error(503, None, -32000, C.E_AUDIT_UNAVAILABLE)
                 return self._rpc_error(400, rpc_id, -32602, "unknown tool")
             params = dict(envelope["params"])
             params.pop("_meta", None)  # MCP-reserved metadata; discard, do not process
             if set(params) - {"name", "arguments"} or not isinstance(params.get("arguments", {}), dict):
-                self._finalize_quiet(conn, ctx.request_id, "rejected", "envelope_rejected",
-                                     latency_ms=latency())
+                if not self._finalize_quiet(conn, ctx.request_id, "rejected", "envelope_rejected",
+                                            latency_ms=latency()):
+                    return self._rpc_error(503, None, -32000, C.E_AUDIT_UNAVAILABLE)
                 return self._rpc_error(400, None, -32602, "rejected")
             arguments = params.get("arguments", {})
 
             try:
+                tools.reject_request_token(ctx, arguments)
                 payload = tools.DISPATCH[tool_enum](env, ctx, arguments)
             except tools.ToolError as err:
                 if not ctx.audit_done:
-                    self._finalize_quiet(conn, ctx.request_id, err.state, err.outcome,
-                                         latency_ms=latency(),
-                                         query_hmac=ctx.query_hmac, query_len=ctx.query_len)
+                    ok = self._finalize_quiet(
+                        conn, ctx.request_id, err.state, err.outcome,
+                        latency_ms=latency(), query_hmac=ctx.query_hmac,
+                        query_len=ctx.query_len,
+                        redacted_fields=err.extra.get("fields"),
+                        redacted_categories=err.extra.get("categories"))
+                    if not ok:
+                        return self._rpc_result(rpc_id, _tool_text(
+                            {"code": C.E_AUDIT_UNAVAILABLE, "retryable": True},
+                            is_error=True))
                 body = err.payload()
-                body.pop("http_status", None)
-                return self._rpc_result(rpc_id, _tool_text(body, is_error=True))
+                http_status = body.pop("http_status", 200)
+                return self._rpc_result(
+                    rpc_id, _tool_text(body, is_error=True), status=http_status)
             except Exception:
-                self._finalize_quiet(conn, ctx.request_id, "error", "internal_error",
-                                     latency_ms=latency())
+                if not self._finalize_quiet(conn, ctx.request_id, "error", "internal_error",
+                                            latency_ms=latency()):
+                    return self._rpc_error(503, None, -32000, C.E_AUDIT_UNAVAILABLE)
                 return self._rpc_error(500, None, -32000, "internal error")
 
             if not ctx.audit_done:
@@ -369,6 +599,18 @@ class ServerHandle:
         self.httpd = httpd
         self.worker = worker
         self.thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        self._maintenance_stop = threading.Event()
+        self._maintenance_thread = threading.Thread(
+            target=self._audit_retention_loop, daemon=True)
+
+    def _audit_retention_loop(self) -> None:
+        while True:
+            interval = (C.AUDIT_RETENTION_RETRY_INTERVAL_S
+                        if self.env.health["audit_retention_failed"]
+                        else C.AUDIT_RETENTION_INTERVAL_S)
+            if self._maintenance_stop.wait(interval):
+                return
+            self.env.maintain_audit_retention()
 
     @property
     def port(self) -> int:
@@ -376,11 +618,14 @@ class ServerHandle:
 
     def start(self):
         self.thread.start()
+        self._maintenance_thread.start()
         if self.worker:
             self.worker.start()
         return self
 
     def stop(self):
+        self._maintenance_stop.set()
+        self._maintenance_thread.join(timeout=5)
         if self.worker:
             self.worker.stop()
         self.httpd.shutdown()
@@ -395,6 +640,9 @@ def build_server(env: Env, *, with_worker: bool = True, run_recovery: bool = Tru
     os.makedirs(env.vault_root, exist_ok=True)
     if run_recovery:
         run_startup_recovery(env)
+    # Retention is enforced before the listener opens, then by the hourly
+    # maintenance loop.  Failures are contained and reflected by /readyz.
+    env.maintain_audit_retention(force=True)
     conn = connect(env.db_path)
     try:
         gate = registry.union_gate(conn)

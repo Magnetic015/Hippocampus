@@ -67,10 +67,13 @@ def bind_peer(conn: sqlite3.Connection, client_id: str, ip: str) -> None:
 
 
 def revoke_peer(conn: sqlite3.Connection, client_id: str, ip: str) -> None:
-    conn.execute(
+    addr = ipaddress.ip_address(ip)  # keep revoke spelling-equivalent to bind_peer
+    cur = conn.execute(
         "UPDATE client_sources SET revoked_at=? WHERE client_id=? AND canonical_ip=?",
-        (now(), client_id, ip),
+        (now(), client_id, str(addr)),
     )
+    if cur.rowcount != 1:
+        raise AuthzError("NO_SUCH_PEER")
 
 
 def _active_clause() -> str:

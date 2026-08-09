@@ -188,6 +188,56 @@ def test_stale_audit_rows_converge(lab_noworker, key):
                for r in other)
 
 
+def test_recovery_pending_audit_converges_after_artifact_promotion(lab_noworker, key):
+    lab = lab_noworker
+    failpoints.arm("commit.rename.before")
+    lab.call("memory_commit", commit_args(key()))
+    conn = lab.db()
+    try:
+        row = conn.execute("SELECT * FROM audit").fetchone()
+        assert row["state"] == "recovery_pending"
+        conn.execute(
+            "UPDATE audit SET process_instance_id='prior-process',"
+            " normalized_ref='safe-history', latency_ms=17,"
+            " redacted_fields='[\"title\"]' WHERE request_id=?",
+            (row["request_id"],),
+        )
+        before = dict(conn.execute("SELECT * FROM audit").fetchone())
+    finally:
+        conn.close()
+
+    stats = run_startup_recovery(lab.env)
+    after = lab.audit_rows()[0]
+
+    assert stats["promoted"] == 1 and stats["audit_converged"] == 1
+    assert after["state"] == "ok" and after["outcome_code"] == C.OUTCOME_COMMIT_OK
+    for field in (
+            "request_id", "ts", "process_instance_id", "root_request_id", "event_id",
+            "client_id", "operation_enum", "tool_enum", "normalized_ref", "latency_ms",
+            "scan_policy_version", "redacted_fields", "redacted_categories"):
+        assert after[field] == before[field]
+
+
+def test_recovery_pending_audit_becomes_error_after_artifact_conflict(
+        lab_noworker, key):
+    lab = lab_noworker
+    failpoints.arm("commit.rename.before")
+    lab.call("memory_commit", commit_args(key()))
+    staging = list(Path(lab.vault).rglob(".hippocampus-*.staging"))[0]
+    staging.write_bytes(b"tampered prior-process artifact")
+    conn = lab.db()
+    try:
+        conn.execute("UPDATE audit SET process_instance_id='prior-process'")
+    finally:
+        conn.close()
+
+    stats = run_startup_recovery(lab.env)
+    row = lab.audit_rows()[0]
+
+    assert stats["hash_mismatch"] == 1 and stats["audit_converged"] == 1
+    assert row["state"] == "error" and row["outcome_code"] == C.OUTCOME_FINALIZE_LOST
+
+
 def test_expired_reservation_lease_released_not_rebuilt(lab_noworker, key):
     lab = lab_noworker
     k = key()

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import stat
 from pathlib import Path
 
 PROJECT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
@@ -68,7 +69,13 @@ def write_staging(staging: Path, data: bytes) -> None:
     refuse_symlink(staging.parent)
     fd = os.open(str(staging), os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
     try:
-        os.write(fd, data)
+        view = memoryview(data)
+        written = 0
+        while written < len(view):
+            count = os.write(fd, view[written:])
+            if count <= 0:
+                raise OSError("write made no progress")
+            written += count
         os.fsync(fd)
     finally:
         os.close(fd)
@@ -86,3 +93,40 @@ def sha256_bytes(data: bytes) -> str:
 
 def sha256_file(path: Path) -> str:
     return sha256_bytes(path.read_bytes())
+
+
+def artifact_matches(path: Path, expected_sha256: str) -> bool:
+    """Match a recovery artifact without following symlinks or opening special files."""
+    try:
+        before = path.lstat()
+    except OSError:
+        return False
+    if not stat.S_ISREG(before.st_mode) or stat.S_IMODE(before.st_mode) != 0o600:
+        return False
+
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    elif path.is_symlink():
+        return False
+    try:
+        fd = os.open(str(path), flags)
+    except OSError:
+        return False
+    try:
+        opened = os.fstat(fd)
+        if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+            return False
+        if not stat.S_ISREG(opened.st_mode) or stat.S_IMODE(opened.st_mode) != 0o600:
+            return False
+        digest = hashlib.sha256()
+        while True:
+            chunk = os.read(fd, 128 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+        return digest.hexdigest() == expected_sha256
+    except OSError:
+        return False
+    finally:
+        os.close(fd)

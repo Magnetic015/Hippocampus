@@ -2,16 +2,19 @@
 # 规范托管：/home/kkp/hippocampus/deploy-hippocampus-client.ps1（Pi5 192.168.2.41）。
 # 拉取即用（需已有到 kkp@192.168.2.41 的 SSH）：
 #   scp kkp@192.168.2.41:/home/kkp/hippocampus/deploy-hippocampus-client.ps1 . ; ./deploy-hippocampus-client.ps1
-# 部署即自动注册：client 已存在则轮换 token；不存在则自动 issue 注册（授予 -Project，默认 soul）并绑定本机 IP。
-# 安全：token 经 SSH stdout 取回、不入 argv；config.toml 只放 bearer_token_env_var 引用、不落明文。
+# 部署即自动注册：client 已存在则轮换 token；不存在则按服务模式派生项目、签发默认 14 天 token 并绑定本机 IP。
+# 安全：token 经 SSH stdout 取回、不入 argv；config.toml 只放 bearer_token_env_var 引用；
+#       生成的 launcher 仅向 Codex 子进程注入 token，绝不写 User 级持久环境。
 param(
     [string]$Source = "auto",
     [string]$ClientId = "windows-codex",
-    [string]$Project = "soul",
+    [string]$Project = "auto",
+    [int]$IssueExpiresDays = 14,
     [string]$Pi5Ssh = "kkp@192.168.2.41",
     [string]$McpUrl = "http://192.168.2.41:8888/mcp/",
     [string]$TokenEnv = "HIPPOCAMPUS_CODEX_TOKEN",
     [string]$TokenFile = "$HOME\.codex\hippocampus\codex.token",
+    [string]$LauncherFile = "$HOME\.codex\hippocampus\launch-codex-hippocampus.ps1",
     [string]$CodexConfig = "$HOME\.codex\config.toml",
     [string]$McpContainer = "hippocampus-hippocampus-mcp-1",
     [string]$StateDb = "/data/state/outbox.db"
@@ -26,6 +29,20 @@ function Log([string]$Message) {
 
 function Die([string]$Message) {
     throw "[deploy] $Message"
+}
+
+function Clear-LegacyTokenEnvironment {
+    # Older installers persisted the secret under HKCU\Environment. Remove that
+    # copy before doing any work; the generated launcher uses Process scope only.
+    [Environment]::SetEnvironmentVariable($TokenEnv, $null, "User")
+    [Environment]::SetEnvironmentVariable($TokenEnv, $null, "Process")
+}
+
+if ($IssueExpiresDays -lt 1) {
+    Die "IssueExpiresDays must be a positive integer."
+}
+if ($TokenEnv -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') {
+    Die "TokenEnv must be a valid environment variable name."
 }
 
 function Write-Utf8NoBom([string]$Path, [string]$Content) {
@@ -104,17 +121,36 @@ function Provision-Token {
 
     $remoteScript = @'
 set -euo pipefail
-CID="$1"; CTN="$2"; DB="$3"; PEER="$4"; PROJ="$5"
+CID="$1"; CTN="$2"; DB="$3"; PEER="$4"; PROJ="$5"; EXPIRES_DAYS="$6"
+MODE="$(docker exec "$CTN" sh -c 'printf %s "${HIPPOCAMPUS_MODE:-commissioning}"')"
+case "$MODE" in
+  commissioning)
+    [ "$PROJ" = auto ] && PROJ=commissioning
+    [ "$PROJ" = commissioning ] || {
+      echo "commissioning mode requires project=commissioning" >&2; exit 2;
+    }
+    ;;
+  production)
+    [ "$PROJ" = auto ] && PROJ=soul
+    ;;
+  *) echo "unsupported HIPPOCAMPUS_MODE" >&2; exit 2;;
+esac
+[[ "$PROJ" =~ ^[a-z0-9][a-z0-9_-]{0,63}$ ]] || {
+  echo "invalid project" >&2; exit 2;
+}
+[[ "$EXPIRES_DAYS" =~ ^[1-9][0-9]*$ ]] || {
+  echo "invalid issue expiry" >&2; exit 2;
+}
 tok="$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')"
 # 已注册则轮换；未注册则 issue 自动注册（部署即自动注册 client_id，授予 $PROJ 读写）
 if ! printf '%s' "$tok" | docker exec -i "$CTN" python -m hippocampus.registry_cli --db "$DB" rotate "$CID" >/dev/null 2>&1; then
-  printf '%s' "$tok" | docker exec -i "$CTN" python -m hippocampus.registry_cli --db "$DB" issue "$CID" --source-tag "$CID" --readable "$PROJ" --writable "$PROJ" >/dev/null
+  printf '%s' "$tok" | docker exec -i "$CTN" python -m hippocampus.registry_cli --db "$DB" issue "$CID" --source-tag "$CID" --readable "$PROJ" --writable "$PROJ" --expires-days "$EXPIRES_DAYS" >/dev/null
 fi
 docker exec "$CTN" python -m hippocampus.registry_cli --db "$DB" bind-peer "$CID" "$PEER" >/dev/null 2>&1 || true
 printf '%s' "$tok"
 '@
 
-    $token = $remoteScript | & ssh -T -o BatchMode=yes -o ConnectTimeout=8 $Pi5Ssh bash -s -- $ClientId $McpContainer $StateDb $peerIp $Project
+    $token = $remoteScript | & ssh -T -o BatchMode=yes -o ConnectTimeout=8 $Pi5Ssh bash -s -- $ClientId $McpContainer $StateDb $peerIp $Project $IssueExpiresDays
     if ($LASTEXITCODE -ne 0) {
         Die "Pi5 token provisioning failed."
     }
@@ -163,15 +199,36 @@ function Acquire-Token {
     }
 }
 
-function Update-TokenEnvironment {
-    $token = (Get-Content -LiteralPath $TokenFile -Raw).Trim()
-    if ([string]::IsNullOrWhiteSpace($token)) {
-        Die "Token file is empty."
-    }
+function Quote-PowerShellSingle([string]$Value) {
+    return "'" + $Value.Replace("'", "''") + "'"
+}
 
-    [Environment]::SetEnvironmentVariable($TokenEnv, $token, "User")
-    Set-Item -Path "Env:$TokenEnv" -Value $token
-    Log "Persisted user environment variable $TokenEnv"
+function Write-CodexLauncher {
+    $tokenFileLiteral = Quote-PowerShellSingle -Value $TokenFile
+    $tokenEnvLiteral = Quote-PowerShellSingle -Value $TokenEnv
+    $launcher = @"
+param(
+    [string]`$CodexExecutable = "codex"
+)
+Set-StrictMode -Version Latest
+`$ErrorActionPreference = "Stop"
+`$tokenFile = $tokenFileLiteral
+`$tokenEnv = $tokenEnvLiteral
+`$token = (Get-Content -LiteralPath `$tokenFile -Raw).Trim()
+if ([string]::IsNullOrWhiteSpace(`$token)) {
+    throw "Hippocampus token file is empty."
+}
+`$previous = [Environment]::GetEnvironmentVariable(`$tokenEnv, "Process")
+try {
+    [Environment]::SetEnvironmentVariable(`$tokenEnv, `$token, "Process")
+    Start-Process -FilePath `$CodexExecutable | Out-Null
+} finally {
+    [Environment]::SetEnvironmentVariable(`$tokenEnv, `$previous, "Process")
+    `$token = `$null
+}
+"@
+    Write-Utf8NoBom -Path $LauncherFile -Content $launcher
+    Log "Wrote process-scoped Codex launcher at $LauncherFile"
 }
 
 function Update-CodexConfig {
@@ -218,9 +275,10 @@ $managedEnd
 Log "Target MCP endpoint: $McpUrl"
 Log "Token source mode: $Source"
 
+Clear-LegacyTokenEnvironment
 Acquire-Token
-Update-TokenEnvironment
 Update-CodexConfig
+Write-CodexLauncher
 
 if (Test-TokenFile -Path $TokenFile) {
     Log "Token authentication check passed."
@@ -230,5 +288,6 @@ if (Test-TokenFile -Path $TokenFile) {
 
 Write-Host ""
 Write-Host "[deploy] Done."
-Write-Host "[deploy] Restart the Codex desktop app to load the new MCP server."
+Write-Host "[deploy] Fully exit Codex, then launch it through: $LauncherFile"
+Write-Host "[deploy] If Codex is not on PATH, pass -CodexExecutable <path-to-Codex.exe>."
 Write-Host "[deploy] After restart, the server should appear as: hippocampus"

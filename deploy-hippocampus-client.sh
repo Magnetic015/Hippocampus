@@ -12,13 +12,14 @@
 #
 # ⚠️ 自动注册/轮换：无可用本机 token（或 --source provision）时，脚本在 Pi5 上——
 #   client 已存在则轮换新 token（旧 token 立即失效，同 client 各端重启后恢复）；
-#   client 不存在则自动 issue 注册（授予 $PROJECT 读写，默认 soul）并绑定本机 IP。
+#   client 不存在则自动 issue 注册（项目按服务模式派生，凭据默认 14 天）并绑定本机 IP。
 #
 # 用法：
 #   ./deploy-hippocampus-client.sh                     # auto：有可用 token 则沿用，否则 Pi5 轮换
 #   ./deploy-hippocampus-client.sh --source provision  # 强制在 Pi5 轮换新 token
 #   ./deploy-hippocampus-client.sh --source copy:/home/kkp/.config/hippocampus/mac-claude.token
-#   变量可覆盖：PI5_SSH / MCP_URL / CLIENT_ID / TOKEN_FILE / MCP_CONTAINER / STATE_DB ...
+#   变量可覆盖：PI5_SSH / MCP_URL / CLIENT_ID / TOKEN_FILE / MCP_CONTAINER / STATE_DB /
+#               PROJECT(auto|显式 project) / ISSUE_EXPIRES_DAYS(仅首次 issue) ...
 #
 # 规范托管位置：/home/kkp/hippocampus/deploy-hippocampus-client.sh（Pi5 192.168.2.41）。
 # 任意 Mac 一键部署 = 从 .2.41 拉取即用（需已有到 kkp@192.168.2.41 的 SSH 访问）：
@@ -38,7 +39,8 @@ STD_APP="${STD_APP:-/Applications/Claude.app}"
 MCP_CONTAINER="${MCP_CONTAINER:-hippocampus-hippocampus-mcp-1}"
 STATE_DB="${STATE_DB:-/data/state/outbox.db}"
 TOKEN_SOURCE="${TOKEN_SOURCE:-auto}"     # auto | provision | copy:<pi5-path>
-PROJECT="${PROJECT:-soul}"               # 首次自动注册(issue)时授予的 readable/writable project
+PROJECT="${PROJECT:-auto}"               # auto: commissioning→commissioning, production→soul
+ISSUE_EXPIRES_DAYS="${ISSUE_EXPIRES_DAYS:-14}" # 仅首次自动 issue；rotate 保留既有期限
 # -----------------------------------------------------------
 
 while [ $# -gt 0 ]; do
@@ -46,10 +48,15 @@ while [ $# -gt 0 ]; do
     --source) TOKEN_SOURCE="${2:?}"; shift 2;;
     --client) CLIENT_ID="${2:?}"; shift 2;;
     --pi5) PI5_SSH="${2:?}"; shift 2;;
+    --project) PROJECT="${2:?}"; shift 2;;
+    --expires-days) ISSUE_EXPIRES_DAYS="${2:?}"; shift 2;;
     -h|--help) sed -n '2,30p' "$0"; exit 0;;
     *) echo "unknown arg: $1" >&2; exit 2;;
   esac
 done
+[[ "$ISSUE_EXPIRES_DAYS" =~ ^[1-9][0-9]*$ ]] || {
+  echo "--expires-days must be a positive integer" >&2; exit 2;
+}
 
 umask 077
 log(){ printf '[deploy] %s\n' "$*" >&2; }
@@ -93,13 +100,33 @@ provision_token(){
   local tmp; tmp="$(mktemp "${TMPDIR:-/tmp}/hcqtok.XXXXXX")"
   # 远端：secrets 生成 token → 存在则 rotate、不存在则 issue 自动注册（授予 $PROJECT 读写）→
   #       幂等 bind-peer → 仅把 token 打到 stdout（本地捕获进文件）；token 不入 argv，其余输出丢弃
-  if ! SSH 'bash -s' "$CLIENT_ID" "$MCP_CONTAINER" "$STATE_DB" "$ip" "$PROJECT" >"$tmp" <<'REMOTE'
+  if ! SSH 'bash -s' "$CLIENT_ID" "$MCP_CONTAINER" "$STATE_DB" "$ip" "$PROJECT" \
+      "$ISSUE_EXPIRES_DAYS" >"$tmp" <<'REMOTE'
 set -euo pipefail
-CID="$1"; CTN="$2"; DB="$3"; PEER="$4"; PROJ="$5"
+CID="$1"; CTN="$2"; DB="$3"; PEER="$4"; PROJ="$5"; EXPIRES_DAYS="$6"
+MODE="$(docker exec "$CTN" sh -c 'printf %s "${HIPPOCAMPUS_MODE:-commissioning}"')"
+case "$MODE" in
+  commissioning)
+    [ "$PROJ" = auto ] && PROJ=commissioning
+    [ "$PROJ" = commissioning ] || {
+      echo "commissioning mode requires project=commissioning" >&2; exit 2;
+    }
+    ;;
+  production)
+    [ "$PROJ" = auto ] && PROJ=soul
+    ;;
+  *) echo "unsupported HIPPOCAMPUS_MODE" >&2; exit 2;;
+esac
+[[ "$PROJ" =~ ^[a-z0-9][a-z0-9_-]{0,63}$ ]] || {
+  echo "invalid project" >&2; exit 2;
+}
+[[ "$EXPIRES_DAYS" =~ ^[1-9][0-9]*$ ]] || {
+  echo "invalid issue expiry" >&2; exit 2;
+}
 tok="$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')"
 # 已注册则轮换；未注册则 issue 自动注册（部署即自动注册 client_id）
 if ! printf '%s' "$tok" | docker exec -i "$CTN" python -m hippocampus.registry_cli --db "$DB" rotate "$CID" >/dev/null 2>&1; then
-  printf '%s' "$tok" | docker exec -i "$CTN" python -m hippocampus.registry_cli --db "$DB" issue "$CID" --source-tag "$CID" --readable "$PROJ" --writable "$PROJ" >/dev/null
+  printf '%s' "$tok" | docker exec -i "$CTN" python -m hippocampus.registry_cli --db "$DB" issue "$CID" --source-tag "$CID" --readable "$PROJ" --writable "$PROJ" --expires-days "$EXPIRES_DAYS" >/dev/null
 fi
 docker exec "$CTN" python -m hippocampus.registry_cli --db "$DB" bind-peer "$CID" "$PEER" >/dev/null 2>&1 || true
 printf '%s' "$tok"
