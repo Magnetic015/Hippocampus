@@ -200,8 +200,15 @@ def test_retention_failure_marks_readiness_down_without_leaking_error(
     try:
         assert lab.env.health["audit_retention_failed"] is True
         assert lab.env.health["audit_sink_down"] is True
-        last = lab.env._audit_retention_last_attempt
-        assert last is not None
+        assert lab.env._audit_retention_last_attempt is not None
+        # Pin the gate to an exactly representable instant. Reusing the real
+        # time.monotonic() reading makes `last + interval` round, so the gate's
+        # `attempt_at - last` can land a few ulps under the interval and skip
+        # the due attempt -- around 7% of the time on a freshly booted host,
+        # where monotonic() is still small, and effectively never on a
+        # long-running one.
+        last = 1000.0
+        lab.env._audit_retention_last_attempt = last
         assert not lab.env.maintain_audit_retention(
             monotonic_now=last + C.AUDIT_RETENTION_RETRY_INTERVAL_S - 1)
         assert len(attempts) == 1

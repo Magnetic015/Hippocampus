@@ -1,7 +1,10 @@
 name: tests
 
 on:
+  # Branch work is covered by pull_request; listing push for every branch too
+  # would run the suite twice per commit on same-repository pull requests.
   push:
+    branches: [main]
   pull_request:
 
 jobs:
