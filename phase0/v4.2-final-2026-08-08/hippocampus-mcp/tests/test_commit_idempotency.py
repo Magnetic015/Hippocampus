@@ -3,6 +3,7 @@
 import concurrent.futures as cf
 import json
 import sqlite3
+import time
 from pathlib import Path
 
 from harness import commit_args
@@ -52,36 +53,52 @@ def test_same_key_same_payload_replays_same_event(lab, key):
     assert {r["state"] for r in rows} == {"ok", "idempotent_replay"}
 
 
-def test_semantically_equal_event_times_replay_and_migrate_legacy_hash(lab, key):
-    utc_key = key()
-    utc_z = commit_args(utc_key, event_at="2026-08-01T01:30:00.000Z")
-    _, first, is_error = lab.call("memory_commit", utc_z)
-    assert not is_error
-
-    legacy_utc_hmac = canonical.payload_hmac(
+def _write_legacy_hmac(lab, k, args, event_at):
+    """Rewrite the reservation's hash the way pre-normalization builds stored it."""
+    legacy = canonical.payload_hmac(
         lab.env.idem_key,
         {
-            "title": utc_z["title"],
-            "summary": utc_z["summary"],
-            "retrieval_text": utc_z["retrieval_text"],
-            "detail_body": utc_z["detail_body"],
-            "event_at": utc_z["event_at"],
-            "project": utc_z["project"],
-            "type": utc_z["type"],
+            "title": args["title"],
+            "summary": args["summary"],
+            "retrieval_text": args["retrieval_text"],
+            "detail_body": args["detail_body"],
+            "event_at": event_at,
+            "project": args["project"],
+            "type": args["type"],
         },
     )
     conn = lab.db()
     try:
         conn.execute(
             "UPDATE idempotency_reservation SET payload_hmac=? WHERE idempotency_key=?",
-            (legacy_utc_hmac, utc_key),
+            (legacy, k),
         )
     finally:
         conn.close()
+    return legacy
 
-    _, replay, is_error = lab.call(
-        "memory_commit", commit_args(utc_key, event_at="2026-08-01T01:30:00+00:00"))
+
+def test_semantically_equal_event_times_replay_and_migrate_legacy_hash(lab, key):
+    utc_key = key()
+    utc_z = commit_args(utc_key, event_at="2026-08-01T01:30:00.000Z")
+    _, first, is_error = lab.call("memory_commit", utc_z)
+    assert not is_error
+
+    legacy_utc_hmac = _write_legacy_hmac(lab, utc_key, utc_z, utc_z["event_at"])
+
+    # The retry repeats the caller's original spelling, so the legacy hash is
+    # provable and migrates.
+    _, replay, is_error = lab.call("memory_commit", utc_z)
     assert not is_error and replay["document_id"] == first["document_id"]
+    conn = lab.db()
+    try:
+        migrated = conn.execute(
+            "SELECT payload_hmac FROM idempotency_reservation WHERE idempotency_key=?",
+            (utc_key,),
+        ).fetchone()["payload_hmac"]
+    finally:
+        conn.close()
+    assert migrated != legacy_utc_hmac
 
     unset_key = key()
     unset_args = commit_args(unset_key)
@@ -122,24 +139,31 @@ def test_semantically_equal_event_times_replay_and_migrate_legacy_hash(lab, key)
     assert migrated_hmac != legacy_absent_hmac
 
 
-def test_nonzero_fraction_legacy_utc_suffix_migrates(lab, key):
+def test_legacy_hash_is_not_migrated_across_event_time_spellings(lab, key):
+    """A legacy hash only migrates for the spelling it was computed from.
+
+    Before normalization these two spellings hashed differently and already
+    conflicted, so refusing them preserves the pre-upgrade behaviour; the stored
+    hash cannot prove that only the event_at spelling changed.
+    """
     k = key()
     old_raw = commit_args(k, event_at="2026-08-01T01:30:00.123Z")
-    _, first, is_error = lab.call("memory_commit", old_raw)
+    _, _, is_error = lab.call("memory_commit", old_raw)
     assert not is_error
-    legacy_hmac = canonical.payload_hmac(lab.env.idem_key, old_raw)
-    conn = lab.db()
-    try:
-        conn.execute(
-            "UPDATE idempotency_reservation SET payload_hmac=? WHERE idempotency_key=?",
-            (legacy_hmac, k),
-        )
-    finally:
-        conn.close()
+    _write_legacy_hmac(lab, k, old_raw, old_raw["event_at"])
 
-    _, replay, is_error = lab.call(
-        "memory_commit", commit_args(k, event_at="2026-08-01T01:30:00.1230+00:00"))
-    assert not is_error and replay["document_id"] == first["document_id"]
+    _, error, is_error = lab.call(
+        "memory_commit", commit_args(k, event_at="2026-08-01T01:30:00.123+00:00"))
+    assert is_error and error["code"] == C.E_IDEMPOTENCY_CONFLICT
+
+
+def test_long_fraction_event_at_does_not_amplify_work(lab, key):
+    """A long fractional event_at must cost one hash, not one per precision."""
+    args = commit_args(key(), event_at="2026-08-01T01:30:00.1" + ("0" * 40_000) + "Z")
+    start = time.perf_counter()
+    status, _, is_error = lab.call("memory_commit", args)
+    assert time.perf_counter() - start < 5.0
+    assert status == 200 and not is_error
 
 
 def test_same_key_different_payload_is_conflict(lab, key):
