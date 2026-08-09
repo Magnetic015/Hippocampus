@@ -10,9 +10,9 @@
 #   * ~/.claude.json 里只放 `Bearer ${HIPPOCAMPUS_CLAUDE_TOKEN}` 变量引用，不落明文。
 #   * 注入靠 wrapper/分身 launcher 的进程内 env；绝不用 `launchctl setenv`（全局泄漏）。
 #
-# ⚠️ 轮换副作用：当没有可用本机 token（或 --source provision）时，脚本会在 Pi5 上
-#   为该 client 轮换出新 token —— 这会使旧 token 立即失效，所有用同一 client 的
-#   Mac 客户端（标准版 + 分身，共享同一 0600 文件）都需用新 token，重启后恢复。
+# ⚠️ 自动注册/轮换：无可用本机 token（或 --source provision）时，脚本在 Pi5 上——
+#   client 已存在则轮换新 token（旧 token 立即失效，同 client 各端重启后恢复）；
+#   client 不存在则自动 issue 注册（授予 $PROJECT 读写，默认 soul）并绑定本机 IP。
 #
 # 用法：
 #   ./deploy-hippocampus-client.sh                     # auto：有可用 token 则沿用，否则 Pi5 轮换
@@ -38,6 +38,7 @@ STD_APP="${STD_APP:-/Applications/Claude.app}"
 MCP_CONTAINER="${MCP_CONTAINER:-hippocampus-hippocampus-mcp-1}"
 STATE_DB="${STATE_DB:-/data/state/outbox.db}"
 TOKEN_SOURCE="${TOKEN_SOURCE:-auto}"     # auto | provision | copy:<pi5-path>
+PROJECT="${PROJECT:-soul}"               # 首次自动注册(issue)时授予的 readable/writable project
 # -----------------------------------------------------------
 
 while [ $# -gt 0 ]; do
@@ -62,12 +63,17 @@ mkdir -p "$(dirname "$TOKEN_FILE")" "$(dirname "$WRAPPER")"
 # 用一次 initialize 探测 token 是否可认证（200=通过），不回显 token
 auth_ok(){ # $1=token 文件
   [ -r "$1" ] || return 1
-  local code
-  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 -X POST \
+  local code token
+  IFS= read -r token <"$1" || [ -n "${token:-}" ]
+  [[ "$token" =~ ^[A-Za-z0-9_-]{43,}$ ]] || return 1
+  # Feed the sensitive header through curl's stdin config. `token` is a
+  # non-exported shell variable and never becomes a process argument.
+  code=$(printf 'header = "Authorization: Bearer %s"\n' "$token" | \
+    curl --config - -s -o /dev/null -w '%{http_code}' --max-time 8 -X POST \
     -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
-    -H "Authorization: Bearer $(cat "$1")" \
     -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"deploy-probe","version":"0"}}}' \
     "$MCP_URL" 2>/dev/null) || return 1
+  token=''
   [ "$code" = "200" ]
 }
 
@@ -83,19 +89,22 @@ mac_peer_ip(){
 # 在 Pi5 上生成→轮换→绑定，明文 token 只经 SSH stdout 灌进本机 0600 文件
 provision_token(){
   local ip; ip="$(mac_peer_ip)"; [ -n "${ip:-}" ] || die "无法确定本机 LAN IP（peer 绑定需要）"
-  log "在 Pi5 为 $CLIENT_ID 轮换新 token 并绑定 peer $ip ..."
+  log "在 Pi5 为 $CLIENT_ID 注册/轮换 token 并绑定 peer $ip ..."
   local tmp; tmp="$(mktemp "${TMPDIR:-/tmp}/hcqtok.XXXXXX")"
-  # 远端：secrets 生成 token → stdin 喂给 registry rotate（不入 argv）→ 幂等 bind-peer →
-  #       仅把 token 打到 stdout（本地捕获进文件）；其余输出全部丢弃到 stderr/null
-  if ! SSH 'bash -s' "$CLIENT_ID" "$MCP_CONTAINER" "$STATE_DB" "$ip" >"$tmp" <<'REMOTE'
+  # 远端：secrets 生成 token → 存在则 rotate、不存在则 issue 自动注册（授予 $PROJECT 读写）→
+  #       幂等 bind-peer → 仅把 token 打到 stdout（本地捕获进文件）；token 不入 argv，其余输出丢弃
+  if ! SSH 'bash -s' "$CLIENT_ID" "$MCP_CONTAINER" "$STATE_DB" "$ip" "$PROJECT" >"$tmp" <<'REMOTE'
 set -euo pipefail
-CID="$1"; CTN="$2"; DB="$3"; PEER="$4"
+CID="$1"; CTN="$2"; DB="$3"; PEER="$4"; PROJ="$5"
 tok="$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')"
-printf '%s' "$tok" | docker exec -i "$CTN" python -m hippocampus.registry_cli --db "$DB" rotate "$CID" >/dev/null
+# 已注册则轮换；未注册则 issue 自动注册（部署即自动注册 client_id）
+if ! printf '%s' "$tok" | docker exec -i "$CTN" python -m hippocampus.registry_cli --db "$DB" rotate "$CID" >/dev/null 2>&1; then
+  printf '%s' "$tok" | docker exec -i "$CTN" python -m hippocampus.registry_cli --db "$DB" issue "$CID" --source-tag "$CID" --readable "$PROJ" --writable "$PROJ" >/dev/null
+fi
 docker exec "$CTN" python -m hippocampus.registry_cli --db "$DB" bind-peer "$CID" "$PEER" >/dev/null 2>&1 || true
 printf '%s' "$tok"
 REMOTE
-  then rm -f "$tmp"; die "Pi5 端轮换失败（检查 SSH / docker / registry）"; fi
+  then rm -f "$tmp"; die "Pi5 端注册/轮换失败（检查 SSH / docker / registry）"; fi
   [ -s "$tmp" ] || { rm -f "$tmp"; die "轮换得到空 token"; }
   install -m 600 /dev/null "$TOKEN_FILE"
   cat "$tmp" >"$TOKEN_FILE"; rm -f "$tmp"
