@@ -347,6 +347,32 @@ def test_valid_final_does_not_mask_unsafe_staging(lab_noworker, key, monkeypatch
     }
 
 
+def test_valid_final_removes_redundant_valid_staging(lab_noworker, key, monkeypatch):
+    lab = lab_noworker
+    original_hit = failpoints.hit
+    staging_seen = []
+
+    def restore_final(name):
+        if name != "commit.rename.before":
+            return original_hit(name)
+        staging = next(Path(lab.vault).rglob(".hippocampus-*.staging"))
+        staging_seen.append(staging)
+        conn = lab.db()
+        try:
+            uri = conn.execute("SELECT uri FROM idempotency_reservation").fetchone()["uri"]
+        finally:
+            conn.close()
+        project, document_id = vault.parse_uri(uri)
+        final = vault.doc_path(lab.vault, project, document_id)
+        final.write_bytes(staging.read_bytes())
+        final.chmod(0o600)
+
+    monkeypatch.setattr(failpoints, "hit", restore_final)
+    _, result, is_error = lab.call("memory_commit", commit_args(key()))
+    assert not is_error and result["stored"]
+    assert len(staging_seen) == 1 and not staging_seen[0].exists()
+
+
 def test_search_requires_authoritative_local_provenance_and_indexed_state(
         lab_noworker, key):
     lab = lab_noworker

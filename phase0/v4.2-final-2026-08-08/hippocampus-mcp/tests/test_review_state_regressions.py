@@ -218,6 +218,20 @@ def test_recovery_rejects_tampered_staging_even_with_valid_final(lab_noworker, k
     assert staging.read_bytes() == b"externally altered staging"
 
 
+def test_recovery_removes_redundant_valid_staging(lab_noworker, key):
+    lab = lab_noworker
+    staging, final, _ = _prepared_paths(lab, key())
+    final.write_bytes(staging.read_bytes())
+    final.chmod(0o600)
+
+    stats = run_startup_recovery(lab.env)
+    out = _outbox(lab)
+
+    assert stats["readied"] == 1 and out["status"] == "ready"
+    assert _reservation_state(lab) == "stored"
+    assert final.exists() and not staging.exists()
+
+
 @pytest.mark.parametrize("unsafe_kind", ["symlink", "directory", "mode"])
 def test_recovery_rejects_unsafe_staging_artifact(lab_noworker, key, unsafe_kind):
     lab = lab_noworker

@@ -87,6 +87,15 @@ def promote_staging(staging: Path, final: Path) -> None:
     _fsync_dir(final.parent)
 
 
+def discard_staging(staging: Path) -> None:
+    """Durably remove a redundant, already-validated staging entry."""
+    try:
+        os.unlink(staging)
+    except FileNotFoundError:
+        return
+    _fsync_dir(staging.parent)
+
+
 def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 

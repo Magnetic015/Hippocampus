@@ -178,33 +178,6 @@ def _render_commit_document(ctx, res, args: dict, detail: str | None,
         args["retrieval_text"], detail)
 
 
-def _legacy_payload_matches_durable_document(env, ctx, res, args: dict,
-                                             detail: str | None, event_at: str,
-                                             project: str) -> bool:
-    """Prove an old raw-input HMAC equivalent via the rendered document.
-
-    Pre-normalization HMACs cannot be inverted, and RFC3339 has too many
-    equivalent raw spellings to enumerate safely.  The committed Outbox hash
-    (or a strict artifact when preparation did not reach Outbox insertion) is
-    an authoritative comparison for every client-controlled document field.
-    """
-    desired_sha = vault.sha256_bytes(
-        _render_commit_document(ctx, res, args, detail, event_at, project))
-    out = ctx.conn.execute(
-        "SELECT desired_sha256 FROM outbox WHERE event_id=?", (res["event_id"],)
-    ).fetchone()
-    if out is not None:
-        return out["desired_sha256"] == desired_sha
-    try:
-        artifact_project, document_id = vault.parse_uri(res["uri"])
-    except vault.VaultError:
-        return False
-    final = vault.doc_path(env.vault_root, artifact_project, document_id)
-    staging = vault.staging_path(env.vault_root, artifact_project, res["event_id"])
-    return (vault.artifact_matches(final, desired_sha)
-            or vault.artifact_matches(staging, desired_sha))
-
-
 def memory_commit(env, ctx, args: dict) -> dict:
     _strict_schema(
         args,
@@ -254,7 +227,18 @@ def memory_commit(env, ctx, args: dict) -> dict:
     if event_at == "unset":
         legacy_event_values.update((None, "unset"))
     elif event_at.endswith("+00:00"):
-        legacy_event_values.add(event_at[:-6] + "Z")
+        utc_second = event_at[:-6]
+        legacy_event_values.update(
+            utc_second + suffix for suffix in ("Z", "+00:00", "+0000", "+00"))
+        # JavaScript, database and protobuf clients commonly emitted fixed
+        # millisecond/microsecond/nanosecond zero fractions before event_at was
+        # normalized ahead of HMAC calculation.  Only zero fractions are
+        # semantically the same instant; unknown spellings fail closed because
+        # the old HMAC cannot prove which other canonical field changed.
+        for digits in range(1, 10):
+            fractional = utc_second + "." + ("0" * digits)
+            legacy_event_values.update(
+                fractional + suffix for suffix in ("Z", "+00:00", "+0000", "+00"))
     for legacy_event_at in legacy_event_values:
         legacy_fields = dict(cfields, event_at=legacy_event_at)
         compatible_phmacs.add(canonical.payload_hmac(env.idem_key, legacy_fields))
@@ -265,14 +249,8 @@ def memory_commit(env, ctx, args: dict) -> dict:
     try:
         res = sm.lookup_reservation(conn, ctx.client_id, args["idempotency_key"])
         if res is not None:
-            legacy_equivalent = False
-            if (res["canonical_version"] == C.CANONICAL_VERSION
-                    and res["payload_hmac"] not in compatible_phmacs):
-                legacy_equivalent = _legacy_payload_matches_durable_document(
-                    env, ctx, res, args, detail, event_at, project)
             if (res["canonical_version"] != C.CANONICAL_VERSION
-                    or (res["payload_hmac"] not in compatible_phmacs
-                        and not legacy_equivalent)):
+                    or res["payload_hmac"] not in compatible_phmacs):
                 conn.execute("COMMIT")
                 audit.finalize(conn, ctx.request_id, "rejected", "idempotency_conflict")
                 ctx.audit_done = True
@@ -399,7 +377,8 @@ def _commit_files(env, ctx, res, args: dict, detail: str | None, event_at: str, 
             _finalize_quiet(conn, ctx, "error", C.E_HASH_MISMATCH)
             raise ToolError(C.E_HASH_MISMATCH, state="error")
         if final_ok:
-            pass
+            if staging_ok:
+                vault.discard_staging(staging)
         elif staging_ok:
             vault.promote_staging(staging, final)
         else:

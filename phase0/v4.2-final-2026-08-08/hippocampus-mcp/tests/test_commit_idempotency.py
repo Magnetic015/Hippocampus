@@ -134,6 +134,17 @@ def test_same_key_different_payload_is_conflict(lab, key):
         conn.close()
 
 
+def test_legacy_event_migration_never_accepts_other_render_collisions(lab, key):
+    k = key()
+    original = commit_args(k)
+    original.pop("detail_body")
+    _, _, is_error = lab.call("memory_commit", original)
+    assert not is_error
+
+    _, error, is_error = lab.call("memory_commit", commit_args(k, detail_body=""))
+    assert is_error and error["code"] == C.E_IDEMPOTENCY_CONFLICT
+
+
 def test_different_keys_are_independent(lab, key):
     _, a, _ = lab.call("memory_commit", commit_args(key()))
     _, b, _ = lab.call("memory_commit", commit_args(key()))

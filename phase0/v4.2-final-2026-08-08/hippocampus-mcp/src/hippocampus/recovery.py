@@ -51,6 +51,8 @@ def run_startup_recovery(env) -> dict:
                                          error_code="POLICY_BLOCKED", release_lease=True)
                     stats["policy_blocked"] += 1
                     continue
+                if staging_ok:
+                    vault.discard_staging(staging)
                 _mark_stored_ready(conn, res["event_id"])
                 stats["readied"] += 1
             elif staging_ok:
