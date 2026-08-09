@@ -60,7 +60,7 @@ def parse_envelope(raw: bytes) -> dict:
     decoder = json.JSONDecoder(object_pairs_hook=_pairs_hook)
     try:
         obj, end = decoder.raw_decode(text)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, ValueError):
         raise IngressError("bad_json") from None
     if text[end:].strip():
         raise IngressError("trailing_data")

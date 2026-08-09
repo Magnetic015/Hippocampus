@@ -19,7 +19,19 @@ done
 [[ -n "$RECORD" && -r "$RECORD" ]] || usage
 
 file_mode() {
-  stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"
+  if stat -c '%a' "$1" >/dev/null 2>&1; then
+    stat -c '%a' "$1"
+  else
+    stat -f '%Lp' "$1"
+  fi
+}
+
+file_mtime() {
+  if stat -c '%a' "$1" >/dev/null 2>&1; then
+    stat -c '%y' "$1" | cut -d. -f1
+  else
+    stat -f '%Sm' -t '%Y-%m-%dT%H:%M:%S%z' "$1"
+  fi
 }
 
 sha256_file() {
@@ -53,8 +65,7 @@ while IFS=$'\t' read -r client_id backup_id backup_path target_path expected_sha
     continue
   fi
   mode="$(file_mode "$backup_path")"
-  mtime="$(stat -f '%Sm' -t '%Y-%m-%dT%H:%M:%S%z' "$backup_path" 2>/dev/null || \
-           stat -c '%y' "$backup_path" | cut -d. -f1)"
+  mtime="$(file_mtime "$backup_path")"
   if [[ "$mode" != "600" ]]; then
     echo "${client_id}	${backup_id}	${backup_path}	mode=${mode}	integrity_verified=false	result=refused_bad_mode"
     continue

@@ -44,6 +44,19 @@ def test_duplicate_key_and_trailing_data_rejected(lab):
     assert lab.raw(trailing, token=CLIENTS["mac-claude"])[0] == 400
 
 
+def test_oversize_integer_is_rejected_and_audit_converges(lab):
+    body = (b'{"jsonrpc":"2.0","id":' + b"9" * 5000
+            + b',"method":"tools/list"}')
+    status, payload = lab.raw(body, token=CLIENTS["mac-claude"])
+
+    assert status == 400
+    assert payload["id"] is None and payload["error"]["code"] == -32600
+    rows = lab.audit_rows()
+    assert len(rows) == 1
+    assert rows[0]["state"] == "rejected"
+    assert rows[0]["outcome_code"] == "envelope_rejected"
+
+
 def test_depth_and_field_limits(lab):
     deep = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {}}
     node = deep["params"]

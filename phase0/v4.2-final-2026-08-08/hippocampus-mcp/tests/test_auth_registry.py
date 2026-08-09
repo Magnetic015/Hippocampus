@@ -5,6 +5,7 @@ import json
 from harness import CLIENTS, PEPPER, commit_args
 
 from hippocampus import constants as C, registry
+from hippocampus.db import now
 from hippocampus.registry import AuthzError
 from hippocampus.server import Env, build_server
 
@@ -60,6 +61,32 @@ def test_rotation_old_token_fails_new_succeeds(lab):
         conn.close()
     assert lab.rpc("tools/list", token=CLIENTS["mac-codex"])[0] == 401
     assert lab.rpc("tools/list", token=new_token)[0] == 200
+
+
+def test_rotation_renews_finite_expiry_but_preserves_permanent_clients(lab):
+    finite_token = "T" + "finite-rotated" * 4
+    permanent_token = "T" + "permanent-rotated" * 4
+    conn = lab.db()
+    try:
+        conn.execute("UPDATE clients SET expires_at=1 WHERE client_id='mac-codex'")
+        registry.rotate_token(
+            conn, "mac-codex", finite_token, PEPPER, renew_expires_days=14)
+        registry.rotate_token(
+            conn, "mac-claude", permanent_token, PEPPER, renew_expires_days=14)
+        rows = {
+            row["client_id"]: row["expires_at"]
+            for row in conn.execute(
+                "SELECT client_id, expires_at FROM clients"
+                " WHERE client_id IN ('mac-codex','mac-claude')"
+            )
+        }
+        assert rows["mac-codex"] >= now() + 13 * 86400
+        assert rows["mac-claude"] is None
+    finally:
+        conn.close()
+
+    assert lab.rpc("tools/list", token=finite_token)[0] == 200
+    assert lab.rpc("tools/list", token=permanent_token)[0] == 200
 
 
 def test_peer_revocation_causes_gate_denial(lab):
@@ -167,6 +194,38 @@ def test_registry_cli_never_prints_secrets(tmp_path, capsys, monkeypatch):
     out = capsys.readouterr().out
     assert "T" + "s" * 60 not in out and "token_hash" not in out
     assert "192.168.2.9" in out
+
+
+def test_registry_cli_rotation_renews_expired_finite_client(tmp_path, monkeypatch):
+    from hippocampus import registry_cli
+    monkeypatch.setenv("HIPPOCAMPUS_TOKEN_PEPPER", "pepper-value")
+    db = str(tmp_path / "renew.db")
+    token_file = tmp_path / "tok"
+    token_file.write_text("T" + "initial" * 9)
+    token_file.chmod(0o600)
+    registry_cli.main([
+        "--db", db, "issue", "finite-client", "--source-tag", "finite-client",
+        "--readable", "p", "--writable", "p", "--expires-days", "1",
+        "--token-file", str(token_file),
+    ])
+    conn = registry_cli.connect(db)
+    try:
+        conn.execute("UPDATE clients SET expires_at=1 WHERE client_id='finite-client'")
+    finally:
+        conn.close()
+
+    token_file.write_text("T" + "rotated" * 9)
+    registry_cli.main([
+        "--db", db, "rotate", "finite-client", "--renew-expires-days", "14",
+        "--token-file", str(token_file),
+    ])
+    conn = registry_cli.connect(db)
+    try:
+        row = conn.execute(
+            "SELECT expires_at FROM clients WHERE client_id='finite-client'").fetchone()
+        assert row["expires_at"] >= now() + 13 * 86400
+    finally:
+        conn.close()
 
 
 def test_registry_cli_rejects_cidr_and_short_token(tmp_path, monkeypatch):

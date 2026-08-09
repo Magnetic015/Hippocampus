@@ -125,7 +125,7 @@ esac
 }
 tok="$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')"
 # 已注册则轮换；未注册则 issue 自动注册（部署即自动注册 client_id）
-if ! printf '%s' "$tok" | docker exec -i "$CTN" python -m hippocampus.registry_cli --db "$DB" rotate "$CID" >/dev/null 2>&1; then
+if ! printf '%s' "$tok" | docker exec -i "$CTN" python -m hippocampus.registry_cli --db "$DB" rotate "$CID" --renew-expires-days "$EXPIRES_DAYS" >/dev/null 2>&1; then
   printf '%s' "$tok" | docker exec -i "$CTN" python -m hippocampus.registry_cli --db "$DB" issue "$CID" --source-tag "$CID" --readable "$PROJ" --writable "$PROJ" --expires-days "$EXPIRES_DAYS" >/dev/null
 fi
 docker exec "$CTN" python -m hippocampus.registry_cli --db "$DB" bind-peer "$CID" "$PEER" >/dev/null 2>&1 || true

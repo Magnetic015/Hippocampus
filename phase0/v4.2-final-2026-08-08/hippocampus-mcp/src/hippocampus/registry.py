@@ -35,10 +35,25 @@ def create_client(conn: sqlite3.Connection, client_id: str, token: str, pepper: 
     )
 
 
-def rotate_token(conn: sqlite3.Connection, client_id: str, token: str, pepper: bytes) -> None:
-    cur = conn.execute(
-        "UPDATE clients SET token_hash=?, token_version=token_version+1, revoked_at=NULL"
-        " WHERE client_id=?", (token_hash(pepper, token), client_id))
+def rotate_token(conn: sqlite3.Connection, client_id: str, token: str, pepper: bytes, *,
+                 renew_expires_days: int | None = None) -> None:
+    if renew_expires_days is not None and renew_expires_days <= 0:
+        raise ValueError("renew_expires_days must be positive")
+    if renew_expires_days is None:
+        cur = conn.execute(
+            "UPDATE clients SET token_hash=?, token_version=token_version+1, revoked_at=NULL"
+            " WHERE client_id=?", (token_hash(pepper, token), client_id))
+    else:
+        # A NULL expiry is an explicitly permanent client and remains permanent.
+        # Finite clients, including already-expired ones, receive a fresh window
+        # in the same statement that rotates the token.
+        renewed_expires_at = now() + renew_expires_days * 86400
+        cur = conn.execute(
+            "UPDATE clients SET token_hash=?, token_version=token_version+1, revoked_at=NULL,"
+            " expires_at=CASE WHEN expires_at IS NULL THEN NULL ELSE ? END"
+            " WHERE client_id=?",
+            (token_hash(pepper, token), renewed_expires_at, client_id),
+        )
     if cur.rowcount != 1:
         raise AuthzError("NO_SUCH_CLIENT")
 

@@ -94,6 +94,45 @@ def test_client_rollback_requires_private_manifest_and_matching_digest(tmp_path)
     assert digest not in restored.stdout + restored.stderr
 
 
+def test_client_rollback_discards_failed_gnu_stat_probe_output(tmp_path):
+    script = TEMPLATES / "scripts" / "rollback-clients.sh"
+    backup = tmp_path / "client.backup"
+    target = tmp_path / "client.config"
+    manifest = tmp_path / "rollback.tsv"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_stat = fake_bin / "stat"
+    fake_stat.write_text(
+        "#!/usr/bin/env bash\n"
+        "if [[ $1 == -f ]]; then printf 'gnu-filesystem-status\\n'; exit 1; fi\n"
+        "if [[ $1 == -c && $2 == %a ]]; then printf '600\\n'; exit 0; fi\n"
+        "if [[ $1 == -c && $2 == %y ]]; then "
+        "printf '2026-08-09 12:00:00.000000000 +0800\\n'; exit 0; fi\n"
+        "exit 2\n",
+        encoding="utf-8",
+    )
+    fake_stat.chmod(0o755)
+    trusted = b"known-good-client-config\n"
+    digest = hashlib.sha256(trusted).hexdigest()
+    backup.write_bytes(trusted)
+    backup.chmod(0o600)
+    target.write_bytes(b"current-config\n")
+    manifest.write_text(
+        f"client-a\tbackup-a\t{backup}\t{target}\t{digest}\n", encoding="utf-8")
+    manifest.chmod(0o600)
+
+    result = subprocess.run(
+        ["bash", str(script), "--record", str(manifest), "--execute"],
+        capture_output=True, text=True, check=False,
+        env=dict(os.environ, PATH=f"{fake_bin}:{os.environ['PATH']}"),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "result=restored" in result.stdout
+    assert "gnu-filesystem-status" not in result.stdout + result.stderr
+    assert target.read_bytes() == trusted
+
+
 def test_client_deploy_probe_keeps_bearer_token_out_of_argv():
     script = (ROOT.parents[1] / "deploy-hippocampus-client.sh").read_text(encoding="utf-8")
     auth_ok = script.split("auth_ok(){", 1)[1].split("\n}", 1)[0]
@@ -120,7 +159,7 @@ def test_client_installers_align_fresh_grants_with_mode_and_expire_new_clients()
         rotate = next(line for line in script.splitlines()
                       if "registry_cli" in line and " rotate " in line)
         assert '--expires-days "$EXPIRES_DAYS"' in issue
-        assert "--expires-days" not in rotate  # approved permanent rows stay permanent on rotate
+        assert '--renew-expires-days "$EXPIRES_DAYS"' in rotate
 
 
 @pytest.mark.parametrize("mode,expected_project", [

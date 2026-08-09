@@ -16,6 +16,13 @@ from .db import connect, init_db, now
 from . import registry
 
 
+def _positive_days(value: str) -> int:
+    days = int(value)
+    if days <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return days
+
+
 def _read_token(args) -> str:
     if args.token_file:
         st = os.stat(args.token_file)
@@ -50,12 +57,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--writable", default="")
     p.add_argument("--types", default=",".join(("decision", "procedure", "fact", "incident",
                                                 "preference", "constraint", "reference")))
-    p.add_argument("--expires-days", type=int, default=None)
+    p.add_argument("--expires-days", type=_positive_days, default=None)
     p.add_argument("--disabled", action="store_true")
     p.add_argument("--token-file", default=None)
 
     p = sub.add_parser("rotate")
     p.add_argument("client_id")
+    p.add_argument("--renew-expires-days", type=_positive_days, default=None)
     p.add_argument("--token-file", default=None)
 
     p = sub.add_parser("revoke")
@@ -93,7 +101,10 @@ def main(argv: list[str] | None = None) -> int:
                 expires_at=expires, disabled=args.disabled)
             print(json.dumps({"ok": True, "client_id": args.client_id}))
         elif args.cmd == "rotate":
-            registry.rotate_token(conn, args.client_id, _read_token(args), _pepper())
+            registry.rotate_token(
+                conn, args.client_id, _read_token(args), _pepper(),
+                renew_expires_days=args.renew_expires_days,
+            )
             print(json.dumps({"ok": True, "client_id": args.client_id}))
         elif args.cmd == "revoke":
             registry.revoke_client(conn, args.client_id)
