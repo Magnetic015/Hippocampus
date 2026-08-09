@@ -224,6 +224,7 @@ token 存 `~/.config/hippocampus/claude.token`(0600),**不入 shell profile / la
 
 - **URI/Bank 路由**:`memory://shared/<project>/<id>` ↔ `vault/shared/<project>/<id>.md`;客户端**不能**传 Bank,由服务端运行模式路由(prod→`main`,commissioning→`commissioning-v4-2`)。
 - **写入约束**:保留字段 `src/trust/scope/sensitivity/tags/uri/document_id` 由 agent 自报 → 整请求 `RESERVED_FIELD_FORBIDDEN`;服务端强制 `scope:shared`+`sensitivity:internal`,普通 agent 写死 `trust:agent`;`type ∈ {decision,procedure,fact,incident,preference,constraint,reference}`;字段限额见 `03-data-model.md`(`title`≤256、`summary`60–200、`retrieval_text`100–600token/硬顶800、`detail_body`≤128KiB、JSON-RPC 体≤256KiB)。
+- **共享性闸门**:所有文档一律以 `scope:shared` 落库,因此指代"提交方这台机器"的事实会被拒绝——`title`/`summary`/`retrieval_text`/`detail_body` 命中 `本机`/`本地`/`这台机器`/`my machine` 等指示语(白名单放行 `本地化`/`本地时间`/`本地变量`)→ 整请求 `HIPPOCAMPUS_NOT_SHAREABLE`,不落盘、不建 reservation,审计记 `not_shareable` + `host_local`;返回体带 `markers` 指出命中词。**点名主机**的写法仍可提交(如"pi5 192.168.2.41 的默认 Python 是 3.11"),因为读者能判断这条事实说的是谁。词表在 `src/hippocampus/shareability.py`。
 - **信封严格性(重要,见 §12)**:服务端只接受 `tools/call` 的 `params` 含 `name`/`arguments`(现已额外放行 spec 保留键 `_meta`);多余键 → `-32602 "rejected"`。
 - **无 `memory_update`**:同知识换幂等键会并存,更新/合并/去重是 Phase 3。
 

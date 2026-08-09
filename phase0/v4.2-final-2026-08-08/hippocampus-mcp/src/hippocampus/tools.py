@@ -7,7 +7,8 @@ import math
 import re
 import uuid
 
-from . import audit, canonical, constants as C, failpoints, statemachine as sm, textlimits, vault
+from . import (audit, canonical, constants as C, failpoints, shareability,
+               statemachine as sm, textlimits, vault)
 from .audit import AuditError
 from .hindsight_client import HindsightError
 from .mdrender import render
@@ -72,6 +73,19 @@ def scan_or_reject(env, fields: dict[str, str | None]) -> None:
         cats = sorted({c for _, cs in findings for c in cs})
         raise ToolError(C.E_SECRET_REJECTED, outcome=C.OUTCOME_SECRET_REJECTED,
                         stored=False, indexed=False, fields=paths, categories=cats)
+
+
+def reject_unshareable(fields: dict[str, str | None]) -> None:
+    """Refuse a fact whose subject is the committing host (04 §4.1 scope=shared)."""
+    paths, markers = shareability.scan_fields(fields)
+    if paths:
+        raise ToolError(
+            C.E_NOT_SHAREABLE, outcome=C.OUTCOME_NOT_SHAREABLE,
+            stored=False, indexed=False,
+            fields=[p if p in C.FIELD_PATHS else C.UNKNOWN_FIELD for p in paths],
+            categories=[shareability.CATEGORY], markers=markers,
+            hint="every document is stored with scope:shared; name the host this"
+                 " fact is about instead of referring to the one you are running on")
 
 
 def _business_value_contains_request_token(ctx, value) -> bool:
@@ -213,6 +227,12 @@ def memory_commit(env, ctx, args: dict) -> dict:
         "idempotency_key": args["idempotency_key"], "title": args["title"],
         "summary": args["summary"], "retrieval_text": args["retrieval_text"],
         "detail_body": detail, "event_at": event_at, "project": project, "type": args["type"],
+    })
+    # After the secret gate: a leaked credential is the more severe finding and
+    # should be the one the caller is told about.
+    reject_unshareable({
+        "title": args["title"], "summary": args["summary"],
+        "retrieval_text": args["retrieval_text"], "detail_body": detail,
     })
 
     cfields = {"title": args["title"], "summary": args["summary"],

@@ -29,6 +29,8 @@ class AuditError(Exception):
 
 _SAFE_SECRET_CATEGORIES = frozenset({
     "private_key", "token", "credential", "dsn", "cookie_header", "encoded_secret",
+    # not a secret class: why a shared-scope commit was refused (shareability.py)
+    "host_local",
 })
 _UNKNOWN_CATEGORY = "unknown_category"
 # recovery_pending is intentionally excluded: it is a truthful crash-recovery
